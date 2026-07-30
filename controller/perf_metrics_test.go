@@ -115,6 +115,34 @@ func TestGetModelPerformanceDefaultsHoursAndFiltersActiveGroups(t *testing.T) {
 	require.Equal(t, []any{}, data["groups"])
 }
 
+func TestGetModelPerformanceReturnsStableEmptyData(t *testing.T) {
+	withModelPerformanceQuery(t, func(params perfmetrics.QueryParams) (perfmetrics.QueryResult, error) {
+		return perfmetrics.QueryResult{
+			ModelName:    params.Model,
+			Hours:        params.Hours,
+			SeriesSchema: "empty-schema",
+			Overall: perfmetrics.AggregateResult{
+				Series: []perfmetrics.BucketPoint{},
+			},
+			Groups: []perfmetrics.GroupResult{},
+		}, nil
+	})
+
+	recorder := performModelPerformanceRequest(t, "/api/perf-metrics?model=empty-model")
+	response := decodeModelPerformanceResponse(t, recorder)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.True(t, response["success"].(bool))
+
+	data := response["data"].(map[string]any)
+	require.Equal(t, "empty-model", data["model_name"])
+	require.Equal(t, float64(24), data["hours"])
+	require.Equal(t, "empty-schema", data["series_schema"])
+	require.Equal(t, []any{}, data["groups"])
+	params := data["overall"].(map[string]any)
+	require.Equal(t, []any{}, params["series"])
+}
+
 func TestGetModelPerformanceReturnsInternalErrorWithoutLeakingQueryError(t *testing.T) {
 	withModelPerformanceQuery(t, func(perfmetrics.QueryParams) (perfmetrics.QueryResult, error) {
 		return perfmetrics.QueryResult{}, errors.New("database connection details must not be exposed")
