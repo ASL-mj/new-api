@@ -42,9 +42,11 @@ import {
   getLobeHubIcon,
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
+import ModelPerformanceBadge from './ModelPerformanceBadge';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { renderLimitedItems } from '../../../../common/ui/RenderUtils';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
+import { useModelPerformanceSummary } from '../../../../../hooks/model-pricing/useModelPerformanceSummary';
 
 const CARD_STYLES = {
   container:
@@ -85,6 +87,10 @@ const PricingCardView = ({
   );
   const getModelKey = (model) => model.key ?? model.model_name ?? model.id;
   const isMobile = useIsMobile();
+  const performanceByModel = useModelPerformanceSummary({
+    hours: 24,
+    enabled: !loading && filteredModels.length > 0,
+  });
 
   const handleCheckboxChange = (model, checked) => {
     if (!setSelectedRowKeys) return;
@@ -153,7 +159,7 @@ const PricingCardView = ({
   };
 
   // 渲染标签
-  const renderTags = (record) => {
+  const renderTags = (record, perf) => {
     // 计费类型标签（左边）
     let billingTag = (
       <Tag key='billing' shape='circle' color='white' size='small'>
@@ -193,19 +199,20 @@ const PricingCardView = ({
     }
 
     return (
-      <div className='flex items-center justify-between'>
-        <div className='flex items-center gap-2'>{billingTag}</div>
-        <div className='flex items-center gap-1'>
+      <div className='flex items-end justify-between gap-3'>
+        <div className='flex min-w-0 flex-wrap items-center gap-1'>
+          {billingTag}
           {customTags.length > 0 &&
             renderLimitedItems({
               items: customTags.map((tag, idx) => ({
                 key: `custom-${idx}`,
                 element: tag,
               })),
-              renderItem: (item, idx) => item.element,
+              renderItem: (item) => item.element,
               maxDisplay: 3,
             })}
         </div>
+        <ModelPerformanceBadge perf={perf} t={t} />
       </div>
     );
   };
@@ -268,11 +275,13 @@ const PricingCardView = ({
                         {model.model_name}
                       </h3>
                       <div className='flex flex-col gap-1 text-xs mt-1'>
-                        {priceData.isDynamicPricing ? (
-                          formatDynamicPriceSummary(priceData.billingExpr, t, priceData.usedGroupRatio)
-                        ) : (
-                          formatPriceInfo(priceData, t, siteDisplayType)
-                        )}
+                        {priceData.isDynamicPricing
+                          ? formatDynamicPriceSummary(
+                              priceData.billingExpr,
+                              t,
+                              priceData.usedGroupRatio,
+                            )
+                          : formatPriceInfo(priceData, t, siteDisplayType)}
                       </div>
                     </div>
                   </div>
@@ -316,7 +325,7 @@ const PricingCardView = ({
                 {/* 底部区域 */}
                 <div className='mt-auto'>
                   {/* 标签区域 */}
-                  {renderTags(model)}
+                  {renderTags(model, performanceByModel.get(model.model_name))}
 
                   {/* 倍率信息（可选） */}
                   {showRatio && (

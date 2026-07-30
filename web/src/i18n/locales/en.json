@@ -3797,6 +3797,8 @@
     "数据保留天数": "Data Retention (Days)",
     "超过保留期的原始数据将被自动清理": "Raw data older than the retention period is removed automatically",
     "模型性能": "Model performance",
+    "延迟": "Latency",
+    "吞吐": "Throughput",
     "模型性能概览": "Model performance overview",
     "性能时间范围": "Performance time range",
     "仅统计真实 Relay 请求": "Only real Relay requests are included",

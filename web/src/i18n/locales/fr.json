@@ -3652,6 +3652,8 @@
     "数据保留天数": "Durée de conservation des données (jours)",
     "超过保留期的原始数据将被自动清理": "Les données brutes au-delà de la période de conservation sont supprimées automatiquement",
     "模型性能": "Performances du modèle",
+    "延迟": "Latence",
+    "吞吐": "Débit",
     "模型性能概览": "Aperçu des performances du modèle",
     "性能时间范围": "Plage de temps des performances",
     "仅统计真实 Relay 请求": "Seules les requêtes Relay réelles sont comptabilisées",

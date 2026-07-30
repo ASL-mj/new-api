@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useState } from 'react';
 import {
   Banner,
+  Avatar,
   Button,
   Empty,
   Radio,
@@ -27,6 +28,7 @@ import {
   Skeleton,
   Typography,
 } from '@douyinfe/semi-ui';
+import { IconPulse } from '@douyinfe/semi-icons';
 import { useModelPerformance } from '../../../../../hooks/model-pricing/useModelPerformance';
 import { formatRequestCount } from '../../../../../helpers/performance';
 import ModelPerformanceStats from './ModelPerformanceStats';
@@ -60,10 +62,15 @@ const ModelPerformancePanel = ({ modelName, t }) => {
   return (
     <div className='space-y-4'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <Text strong>{t('模型性能')}</Text>
-          <div className='text-xs text-gray-500 mt-1'>
-            {t('仅统计真实 Relay 请求')}
+        <div className='flex items-center'>
+          <Avatar size='small' color='green' className='mr-2 shadow-md'>
+            <IconPulse size={16} />
+          </Avatar>
+          <div>
+            <Text className='text-lg font-medium'>{t('模型性能')}</Text>
+            <div className='text-xs text-gray-600 mt-1'>
+              {t('仅统计真实 Relay 请求')}
+            </div>
           </div>
         </div>
         <RadioGroup

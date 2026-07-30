@@ -4186,6 +4186,8 @@
     "数据保留天数": "Số ngày lưu dữ liệu",
     "超过保留期的原始数据将被自动清理": "Dữ liệu thô quá thời hạn lưu sẽ được tự động dọn dẹp",
     "模型性能": "Hiệu năng mô hình",
+    "延迟": "Độ trễ",
+    "吞吐": "Thông lượng",
     "模型性能概览": "Tổng quan hiệu năng mô hình",
     "性能时间范围": "Khoảng thời gian hiệu năng",
     "仅统计真实 Relay 请求": "Chỉ tính các yêu cầu Relay thực tế",
