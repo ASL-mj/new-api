@@ -12,7 +12,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var queryModelPerformance = perfmetrics.Query
+var (
+	queryModelPerformance        = perfmetrics.Query
+	queryModelPerformanceSummary = perfmetrics.QuerySummaryAll
+)
+
+func GetModelPerformanceSummary(c *gin.Context) {
+	hours, ok := parsePerformanceHours(c.Query("hours"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "hours must be one of: 1, 24, 168",
+		})
+		return
+	}
+
+	result, err := queryModelPerformanceSummary(hours, activePerformanceGroups())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "failed to query model performance summary",
+		})
+		return
+	}
+	if result.Models == nil {
+		result.Models = []perfmetrics.ModelSummary{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}
 
 func GetModelPerformance(c *gin.Context) {
 	modelName := strings.TrimSpace(c.Query("model"))

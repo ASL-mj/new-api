@@ -10,6 +10,7 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +20,15 @@ func withModelPerformanceQuery(t *testing.T, query func(perfmetrics.QueryParams)
 	queryModelPerformance = query
 	t.Cleanup(func() {
 		queryModelPerformance = original
+	})
+}
+
+func withModelPerformanceSummaryQuery(t *testing.T, query func(int, []string) (perfmetrics.SummaryAllResult, error)) {
+	t.Helper()
+	original := queryModelPerformanceSummary
+	queryModelPerformanceSummary = query
+	t.Cleanup(func() {
+		queryModelPerformanceSummary = original
 	})
 }
 
@@ -37,6 +47,15 @@ func performModelPerformanceRequest(t *testing.T, target string) *httptest.Respo
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, target, nil)
 	GetModelPerformance(ctx)
+	return recorder
+}
+
+func performModelPerformanceSummaryRequest(t *testing.T, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, target, nil)
+	GetModelPerformanceSummary(ctx)
 	return recorder
 }
 
@@ -154,4 +173,67 @@ func TestGetModelPerformanceReturnsInternalErrorWithoutLeakingQueryError(t *test
 	require.Equal(t, http.StatusInternalServerError, recorder.Code)
 	require.False(t, response["success"].(bool))
 	require.Equal(t, "failed to query model performance", response["message"])
+}
+
+func TestGetModelPerformanceSummaryDefaultsHoursAndFiltersActiveGroups(t *testing.T) {
+	withPerformanceGroupRatios(t, `{"default":1,"vip":2}`)
+
+	var receivedHours int
+	var receivedGroups []string
+	withModelPerformanceSummaryQuery(t, func(hours int, groups []string) (perfmetrics.SummaryAllResult, error) {
+		receivedHours = hours
+		receivedGroups = groups
+		return perfmetrics.SummaryAllResult{Models: []perfmetrics.ModelSummary{}}, nil
+	})
+
+	recorder := performModelPerformanceSummaryRequest(t, "/api/perf-metrics/summary")
+	response := decodeModelPerformanceResponse(t, recorder)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.True(t, response["success"].(bool))
+	assert.Equal(t, 24, receivedHours)
+	assert.Equal(t, []string{"auto", "default", "vip"}, receivedGroups)
+	data := response["data"].(map[string]any)
+	assert.Equal(t, []any{}, data["models"])
+}
+
+func TestGetModelPerformanceSummaryRejectsInvalidHours(t *testing.T) {
+	called := false
+	withModelPerformanceSummaryQuery(t, func(int, []string) (perfmetrics.SummaryAllResult, error) {
+		called = true
+		return perfmetrics.SummaryAllResult{}, nil
+	})
+
+	recorder := performModelPerformanceSummaryRequest(t, "/api/perf-metrics/summary?hours=2")
+	response := decodeModelPerformanceResponse(t, recorder)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.False(t, response["success"].(bool))
+	require.False(t, called)
+}
+
+func TestGetModelPerformanceSummaryReturnsStableEmptyData(t *testing.T) {
+	withModelPerformanceSummaryQuery(t, func(int, []string) (perfmetrics.SummaryAllResult, error) {
+		return perfmetrics.SummaryAllResult{}, nil
+	})
+
+	recorder := performModelPerformanceSummaryRequest(t, "/api/perf-metrics/summary?hours=24")
+	response := decodeModelPerformanceResponse(t, recorder)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	data := response["data"].(map[string]any)
+	assert.Equal(t, []any{}, data["models"])
+}
+
+func TestGetModelPerformanceSummaryHidesQueryError(t *testing.T) {
+	withModelPerformanceSummaryQuery(t, func(int, []string) (perfmetrics.SummaryAllResult, error) {
+		return perfmetrics.SummaryAllResult{}, errors.New("database connection details must not be exposed")
+	})
+
+	recorder := performModelPerformanceSummaryRequest(t, "/api/perf-metrics/summary?hours=1")
+	response := decodeModelPerformanceResponse(t, recorder)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.False(t, response["success"].(bool))
+	require.Equal(t, "failed to query model performance summary", response["message"])
 }
