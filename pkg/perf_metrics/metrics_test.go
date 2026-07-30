@@ -34,6 +34,7 @@ func preparePerfMetricsTestState(t *testing.T, now time.Time) {
 	previousNowFunc := nowFunc
 	previousUpsertPerfMetric := upsertPerfMetric
 	previousGetPerfMetrics := getPerfMetricsByRange
+	previousGetPerfMetricSummaryBuckets := getPerfMetricSummaryBucketsByRange
 	previousDeleteExpiredPerfMetrics := deleteExpiredPerfMetrics
 	previousStartFlushFn := startFlushFn
 
@@ -54,6 +55,7 @@ func preparePerfMetricsTestState(t *testing.T, now time.Time) {
 	nowFunc = func() time.Time { return now }
 	upsertPerfMetric = model.UpsertPerfMetric
 	getPerfMetricsByRange = model.GetPerfMetricsByRange
+	getPerfMetricSummaryBucketsByRange = model.GetPerfMetricSummaryBucketsByRange
 	deleteExpiredPerfMetrics = model.DeleteExpiredPerfMetrics
 	startFlushFn = func() {
 		go flushLoop()
@@ -75,6 +77,7 @@ func preparePerfMetricsTestState(t *testing.T, now time.Time) {
 		nowFunc = previousNowFunc
 		upsertPerfMetric = previousUpsertPerfMetric
 		getPerfMetricsByRange = previousGetPerfMetrics
+		getPerfMetricSummaryBucketsByRange = previousGetPerfMetricSummaryBuckets
 		deleteExpiredPerfMetrics = previousDeleteExpiredPerfMetrics
 		startFlushFn = previousStartFlushFn
 		initOnce = sync.Once{}
@@ -167,6 +170,66 @@ func TestQueryComputesWeightedAveragesAndRequestCounts(t *testing.T) {
 	assert.EqualValues(t, 100, point.AvgTtftMs)
 	assert.Equal(t, 50.0, point.SuccessRate)
 	assert.Equal(t, 50.0, point.AvgTps)
+}
+
+func TestQuerySummaryAllMergesPersistedAndHotBuckets(t *testing.T) {
+	now := time.Unix(3600, 0).UTC()
+	preparePerfMetricsTestState(t, now)
+
+	insertPerfMetric(t, &model.PerfMetric{
+		ModelName:      "gpt-5.4",
+		Group:          "default",
+		BucketTs:       3000,
+		RequestCount:   2,
+		SuccessCount:   2,
+		TotalLatencyMs: 1000,
+		OutputTokens:   80,
+		GenerationMs:   2000,
+	})
+	insertPerfMetric(t, &model.PerfMetric{
+		ModelName:      "gpt-5.4",
+		Group:          "default",
+		BucketTs:       3300,
+		RequestCount:   1,
+		SuccessCount:   0,
+		TotalLatencyMs: 2000,
+		OutputTokens:   20,
+		GenerationMs:   1000,
+	})
+	Record(Sample{
+		Model:        "gpt-5.4",
+		Group:        "default",
+		LatencyMs:    1000,
+		Success:      true,
+		OutputTokens: 100,
+		GenerationMs: 2000,
+	})
+	Record(Sample{Model: "hidden-model", Group: "disabled", LatencyMs: 50, Success: true})
+
+	result, err := QuerySummaryAll(1, []string{"default", "auto"})
+	require.NoError(t, err)
+	require.Len(t, result.Models, 1)
+
+	got := result.Models[0]
+	assert.Equal(t, "gpt-5.4", got.ModelName)
+	assert.EqualValues(t, 1000, got.AvgLatencyMs)
+	assert.Equal(t, 75.0, got.SuccessRate)
+	assert.Equal(t, 40.0, got.AvgTps)
+	assert.Equal(t, []float64{100, 0, 100}, got.RecentSuccessRates)
+}
+
+func TestQuerySummaryAllOmitsModelsWithoutRequests(t *testing.T) {
+	preparePerfMetricsTestState(t, time.Unix(3600, 0).UTC())
+	insertPerfMetric(t, &model.PerfMetric{
+		ModelName:    "empty",
+		Group:        "default",
+		BucketTs:     3300,
+		RequestCount: 0,
+	})
+
+	result, err := QuerySummaryAll(24, []string{"default"})
+	require.NoError(t, err)
+	assert.Empty(t, result.Models)
 }
 
 func TestRecordNormalizesEmptyGroupAndIgnoresEmptyModel(t *testing.T) {

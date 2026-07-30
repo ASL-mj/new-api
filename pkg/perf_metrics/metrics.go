@@ -32,9 +32,10 @@ var (
 		go flushLoop()
 	}
 
-	getPerfMetricsByRange    = model.GetPerfMetricsByRange
-	upsertPerfMetric         = model.UpsertPerfMetric
-	deleteExpiredPerfMetrics = model.DeleteExpiredPerfMetrics
+	getPerfMetricsByRange              = model.GetPerfMetricsByRange
+	getPerfMetricSummaryBucketsByRange = model.GetPerfMetricSummaryBucketsByRange
+	upsertPerfMetric                   = model.UpsertPerfMetric
+	deleteExpiredPerfMetrics           = model.DeleteExpiredPerfMetrics
 )
 
 func Init() {
@@ -182,6 +183,50 @@ func Query(params QueryParams) (QueryResult, error) {
 	return buildQueryResult(params, raw), nil
 }
 
+func QuerySummaryAll(hours int, allowedGroups []string) (SummaryAllResult, error) {
+	hours = normalizeHours(hours)
+	if allowedGroups != nil && len(allowedGroups) == 0 {
+		return SummaryAllResult{Models: []ModelSummary{}}, nil
+	}
+
+	queryFlushMu.RLock()
+	defer queryFlushMu.RUnlock()
+
+	nowTs := nowFunc().Unix()
+	sourceBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
+	startBucketTs := alignTimestamp(nowTs-int64(hours)*hourSeconds, sourceBucketSeconds)
+	endBucketTs := alignTimestamp(nowTs, sourceBucketSeconds)
+	allowed := allowedGroupSet(allowedGroups)
+
+	rows, err := getPerfMetricSummaryBucketsByRange(startBucketTs, endBucketTs, allowedGroups)
+	if err != nil {
+		return SummaryAllResult{}, err
+	}
+
+	totals := make(map[string]counters)
+	modelBuckets := make(map[string]map[int64]counters)
+	for _, row := range rows {
+		mergeModelSummaryCounters(totals, modelBuckets, row.ModelName, row.BucketTs, counters{
+			requestCount:   row.RequestCount,
+			successCount:   row.SuccessCount,
+			totalLatencyMs: row.TotalLatencyMs,
+			outputTokens:   row.OutputTokens,
+			generationMs:   row.GenerationMs,
+		})
+	}
+
+	hotBuckets.Range(func(key, value any) bool {
+		bucket := key.(bucketKey)
+		if bucket.bucketTs < startBucketTs || bucket.bucketTs > endBucketTs || !groupAllowed(bucket.group, allowed) {
+			return true
+		}
+		mergeModelSummaryCounters(totals, modelBuckets, bucket.model, bucket.bucketTs, value.(*hotBucket).snapshot())
+		return true
+	})
+
+	return buildSummaryAllResult(totals, modelBuckets), nil
+}
+
 func normalizeHours(hours int) int {
 	if hours <= 0 {
 		return defaultHours
@@ -326,6 +371,69 @@ func groupAllowed(group string, allowed map[string]struct{}) bool {
 	}
 	_, ok := allowed[group]
 	return ok
+}
+
+func mergeModelSummaryCounters(totals map[string]counters, modelBuckets map[string]map[int64]counters, modelName string, bucketTs int64, value counters) {
+	if modelName == "" || value.requestCount == 0 {
+		return
+	}
+	total := totals[modelName]
+	total.add(value)
+	totals[modelName] = total
+
+	if _, ok := modelBuckets[modelName]; !ok {
+		modelBuckets[modelName] = make(map[int64]counters)
+	}
+	bucket := modelBuckets[modelName][bucketTs]
+	bucket.add(value)
+	modelBuckets[modelName][bucketTs] = bucket
+}
+
+func buildSummaryAllResult(totals map[string]counters, modelBuckets map[string]map[int64]counters) SummaryAllResult {
+	models := make([]ModelSummary, 0, len(totals))
+	for modelName, total := range totals {
+		if total.requestCount == 0 {
+			continue
+		}
+		models = append(models, ModelSummary{
+			ModelName:          modelName,
+			AvgLatencyMs:       avg(total.totalLatencyMs, total.requestCount),
+			SuccessRate:        round2(successRate(total)),
+			AvgTps:             round2(avgTps(total)),
+			RecentSuccessRates: recentSuccessRates(modelBuckets[modelName], 3),
+			RequestCount:       total.requestCount,
+		})
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].RequestCount == models[j].RequestCount {
+			return models[i].ModelName < models[j].ModelName
+		}
+		return models[i].RequestCount > models[j].RequestCount
+	})
+	return SummaryAllResult{Models: models}
+}
+
+func recentSuccessRates(buckets map[int64]counters, limit int) []float64 {
+	if len(buckets) == 0 || limit <= 0 {
+		return nil
+	}
+	timestamps := make([]int64, 0, len(buckets))
+	for timestamp := range buckets {
+		timestamps = append(timestamps, timestamp)
+	}
+	sort.Slice(timestamps, func(i, j int) bool {
+		return timestamps[i] < timestamps[j]
+	})
+	if len(timestamps) > limit {
+		timestamps = timestamps[len(timestamps)-limit:]
+	}
+
+	rates := make([]float64, 0, len(timestamps))
+	for _, timestamp := range timestamps {
+		rates = append(rates, round2(successRate(buckets[timestamp])))
+	}
+	return rates
 }
 
 func mergeCounters(merged map[bucketKey]counters, key bucketKey, value counters) {
