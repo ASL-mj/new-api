@@ -1,129 +1,129 @@
-# NewAPI v0.13.2 Model Performance Frontend Design
+# NewAPI v0.13.2 模型性能前端设计
 
-## 1. Purpose
+## 1. 目的
 
-Port the latest NewAPI model-performance experience to the `v0.13.2` model pricing page without upgrading the rest of the application.
+将最新的 NewAPI 模型性能体验移植到 `v0.13.2` 的模型定价页面，同时不升级应用的其他部分。
 
-The feature must preserve the existing Semi UI visual language and all current model-detail content while adding:
+该功能必须保留现有的 Semi UI 视觉语言和所有当前的模型详情内容，同时新增：
 
-- Average TPS.
-- Average total latency.
-- Success rate.
-- Per-group TPS, TTFT, total latency, and success rate.
-- TTFT trend.
-- Availability trend.
-- Explicit loading, empty, sparse-sample, and error states.
+- 平均 TPS。
+- 平均总延迟。
+- 成功率。
+- 按分组展示的 TPS、TTFT、总延迟和成功率。
+- TTFT 趋势。
+- 可用性趋势。
+- 明确的加载、空状态、样本稀疏和错误状态。
 
-The implementation remains on `dev/skye-v0.13.2-performance` and does not merge the latest NewAPI frontend or framework stack.
+实现仍停留在 `dev/skye-v0.13.2-performance` 分支上，不合并最新的 NewAPI 前端或框架栈。
 
-## 2. Approved Decisions
+## 2. 已批准的决策
 
-- Use a tabbed model-detail SideSheet.
-- Desktop SideSheet width is approximately `760px`; mobile width is `100%`.
-- Tabs are `Overview`, `Performance`, and `API`.
-- Time ranges are `1h`, `24h`, and `7d`; the default is `24h`.
-- Overall metrics are calculated from raw counters across all active groups, not by averaging group percentages or group averages.
-- Fewer than 10 effective requests produces a sparse-sample warning while retaining the real values.
-- Mobile retains the group table and makes it horizontally scrollable.
-- Existing model detail information, dynamic billing, group prices, and endpoint information must not be removed.
+- 使用带标签页的模型详情 SideSheet（侧边抽屉）。
+- 桌面端 SideSheet 宽度约为 `760px`；移动端宽度为 `100%`。
+- 标签页为 `Overview`（概览）、`Performance`（性能）和 `API`。
+- 时间范围为 `1h`、`24h` 和 `7d`；默认值为 `24h`。
+- 整体指标基于所有活跃分组的原始计数计算，而不是对分组百分比或分组均值再求平均。
+- 有效请求少于 10 个时显示样本稀疏警告，同时保留真实值。
+- 移动端保留分组表，并使其可以水平滚动。
+- 现有的模型详情信息、动态计费、分组价格和端点信息都不能删除。
 
-## 3. Information Architecture
+## 3. 信息架构
 
-The model header remains fixed above the tab list and contains the model icon, model name, provider metadata, and close action.
+模型头部固定显示在标签列表上方，包含模型图标、模型名称、提供方元数据和关闭操作。
 
-### 3.1 Overview Tab
+### 3.1 概览标签页
 
-The Overview tab contains the existing model-detail content:
+概览标签页包含现有的模型详情内容：
 
-1. Basic model information.
-2. Model capabilities and metadata already supported by `v0.13.2`.
-3. Group pricing.
-4. Dynamic pricing breakdown when `billing_mode` and `billing_expr` require it.
+1. 基础模型信息。
+2. `v0.13.2` 已支持的模型能力和元数据。
+3. 分组价格。
+4. 当 `billing_mode` 和 `billing_expr` 需要时显示的动态定价明细。
 
-The migration may reorganize these existing components inside the tab container, but it must not change their calculations or visible data.
+迁移可以将这些现有组件重组到标签页容器中，但不能改变其计算方式或可见数据。
 
-### 3.2 Performance Tab
+### 3.2 性能标签页
 
-The Performance tab uses this reading order:
+性能标签页的阅读顺序如下：
 
-1. Page-level time-range selector.
-2. Overall metric cards.
-3. Per-group performance table.
-4. TTFT trend chart.
-5. Availability chart.
+1. 页面级时间范围选择器。
+2. 整体指标卡片。
+3. 分组性能表格。
+4. TTFT 趋势图。
+5. 可用性图表。
 
-The three overall cards are:
+三个整体卡片分别是：
 
-- Average TPS.
-- Average total latency.
-- Success rate.
+- 平均 TPS。
+- 平均总延迟。
+- 成功率。
 
-The group table columns are:
+分组表格列为：
 
-- Group.
-- TPS.
-- Average TTFT.
-- Average total latency.
-- Success rate.
+- 分组。
+- TPS。
+- 平均 TTFT。
+- 平均总延迟。
+- 成功率。
 
-The latency chart plots average TTFT by time bucket. The availability chart plots request success rate by time bucket. The UI must not label TTFT as total latency or use the two values interchangeably.
+延迟图表绘制的是按时间桶统计的平均 TTFT。可用性图表绘制的是按时间桶统计的请求成功率。UI 不得把 TTFT 标成总延迟，也不得将这两个值混为一谈。
 
-### 3.3 API Tab
+### 3.3 API 标签页
 
-The API tab contains the existing API endpoint and supported request-path information. The first release does not add a new playground or request builder.
+API 标签页包含现有的 API 端点和受支持的请求路径信息。首个版本不新增 playground（交互式试用台）或请求构建器。
 
-## 4. Component Design
+## 4. 组件设计
 
-### 4.1 SideSheet Owner
+### 4.1 SideSheet 容器
 
-`ModelDetailSideSheet` remains the entry point and owns:
+`ModelDetailSideSheet` 仍然作为入口，并负责：
 
-- Visibility and close behavior.
-- Current model identity.
-- Active tab.
-- Desktop and mobile width.
-- Reset behavior when the selected model changes.
+- 可见性和关闭行为。
+- 当前模型标识。
+- 活动标签页。
+- 桌面端和移动端宽度。
+- 当所选模型变化时的重置行为。
 
-Opening a different model resets the active tab to Overview and resets the performance time range to `24h`.
+打开不同模型时，会把活动标签页重置为概览，并把性能时间范围重置为 `24h`。
 
-### 4.2 Tab Components
+### 4.2 标签页组件
 
-The model detail is divided into three bounded views:
+模型详情被拆分为三个有边界的视图：
 
-- `ModelOverviewTab`: composes existing basic-information and pricing components.
-- `ModelPerformancePanel`: owns the performance request lifecycle and state rendering.
-- `ModelApiTab`: composes the existing endpoint component.
+- `ModelOverviewTab`：组合现有的基础信息和价格组件。
+- `ModelPerformancePanel`：负责性能请求生命周期和状态渲染。
+- `ModelApiTab`：组合现有的端点组件。
 
-The performance view is divided further:
+性能视图进一步拆分为：
 
-- `ModelPerformanceStats`: renders the three overall metric cards.
-- `ModelPerformanceGroupTable`: renders one row per active group.
-- `ModelPerformanceCharts`: renders the TTFT and availability series.
-- `useModelPerformance`: performs requests, cancels stale work, caches successful responses, and normalizes the API result.
+- `ModelPerformanceStats`：渲染三个整体指标卡片。
+- `ModelPerformanceGroupTable`：每个活跃分组渲染一行。
+- `ModelPerformanceCharts`：渲染 TTFT 和可用性序列。
+- `useModelPerformance`：发起请求、取消过期工作、缓存成功响应，并规范化 API 结果。
 
-Formatting logic belongs in a small performance helper module rather than inside the visual components. It formats throughput, latency, percentage values, and unavailable values consistently.
+格式化逻辑应放在一个小型性能辅助模块里，而不是直接写在可视组件中。该模块统一格式化吞吐量、延迟、百分比值和不可用值。
 
-## 5. Request Lifecycle
+## 5. 请求生命周期
 
-The Performance tab is lazy. Opening the SideSheet or viewing Overview does not request performance data. The first switch to Performance requests:
+性能标签页是懒加载的。打开 SideSheet 或查看概览时不会请求性能数据。首次切换到性能标签页时会发起请求：
 
 ```text
 GET /api/perf-metrics?model=<encoded-model-name>&hours=<1|24|168>
 ```
 
-Request behavior:
+请求行为：
 
-- Cache key: model name plus selected hour range.
-- Successful-result freshness window: 60 seconds.
-- Changing the range requests the corresponding dataset.
-- Returning to a previously loaded range within 60 seconds reuses the cached result.
-- Changing the model or closing the SideSheet cancels or invalidates in-flight work.
-- A stale response must never replace data for the current model and range.
-- Retrying an error only reloads performance data and does not reset the other tabs.
+- 缓存键：模型名称 + 所选小时范围。
+- 成功结果的新鲜度窗口：60 秒。
+- 更改范围会请求对应的数据集。
+- 在 60 秒内返回到之前已加载的范围会复用缓存结果。
+- 更改模型或关闭 SideSheet 会取消或使进行中的工作失效。
+- 过期响应绝不能替换当前模型和范围的数据。
+- 对错误的重试只会重新加载性能数据，不会重置其他标签页。
 
-## 6. API Contract Required by the Frontend
+## 6. 前端所需的 API 契约
 
-The frontend requires an overall aggregate calculated by the backend from raw counters. It must not derive the overall metrics by taking a simple average of group results.
+前端要求后端基于原始计数计算出整体聚合结果。它不得通过简单平均分组结果来推导整体指标。
 
 ```json
 {
@@ -164,7 +164,7 @@ The frontend requires an overall aggregate calculated by the backend from raw co
 }
 ```
 
-Backend formulas:
+后端公式：
 
 ```text
 average total latency = total_latency_ms / request_count
@@ -173,146 +173,146 @@ success rate          = success_count / request_count * 100
 TPS                   = output_tokens / (generation_ms / 1000)
 ```
 
-The overall values use counters merged across every active group before applying these formulas. This prevents low-volume groups from having the same statistical weight as high-volume groups.
+整体值使用所有活跃分组合并后的计数，再应用上述公式计算。这样可以避免低流量分组与高流量分组拥有相同的统计权重。
 
-Only currently active groups are returned. The API must not expose user, token, channel, or individual-request data.
+仅返回当前活跃的分组。API 不得暴露用户、令牌、频道或单条请求数据。
 
-## 7. Time Range and Bucket Requirements
+## 7. 时间范围与分桶要求
 
-The user-facing ranges map as follows:
+用户可见的范围映射如下：
 
-| Label | API value | Intended chart density |
+| 标签 | API 值 | 期望的图表密度 |
 |---|---:|---:|
-| `1h` | `hours=1` | approximately 12 points |
-| `24h` | `hours=24` | approximately 24 points |
-| `7d` | `hours=168` | up to 168 points |
+| `1h` | `hours=1` | 约 12 个点 |
+| `24h` | `hours=24` | 约 24 个点 |
+| `7d` | `hours=168` | 最多 168 个点 |
 
-Supporting a meaningful `1h` chart requires persisted source buckets no larger than five minutes. An hourly source bucket would produce at most one point and does not satisfy this design.
+要支持有意义的 `1h` 图表，持久化源桶的粒度必须不大于 5 分钟。按小时的源桶最多只会产生一个点，无法满足该设计要求。
 
-The backend query layer is responsible for range-appropriate rollup:
+后端查询层负责按范围进行合适的 rollup（汇总）：
 
-- `1h`: five-minute points.
-- `24h`: hourly points.
-- `7d`: hourly points, capped at 168 points.
+- `1h`：5 分钟粒度点。
+- `24h`：小时粒度点。
+- `7d`：小时粒度点，最多 168 个。
 
-The frontend renders the returned series and does not perform time-bucket merging.
+前端渲染返回的序列，不做时间桶合并。
 
-## 8. Visual Behavior
+## 8. 视觉行为
 
-### 8.1 Desktop
+### 8.1 桌面端
 
-- SideSheet width: approximately `760px`.
-- Header and tabs remain visible above the scrollable tab content.
-- Overall metrics use three equal columns.
-- TTFT and availability charts may share a row when the available content width supports it.
-- Cards and panels follow existing Semi UI border, spacing, typography, and radius conventions.
+- SideSheet 宽度：约 `760px`。
+- 头部和标签页在可滚动的标签内容上方保持可见。
+- 整体指标使用三列等宽布局。
+- 当可用内容宽度支持时，TTFT 图和可用性图可以并排显示。
+- 卡片和面板遵循现有 Semi UI 的边框、间距、排版和圆角规范。
 
-### 8.2 Mobile
+### 8.2 移动端
 
-- SideSheet width: `100%`.
-- Overall metrics remain a stable three-column row with compact labels and values.
-- The group table retains desktop columns and scrolls horizontally.
-- A right-edge fade or equivalent affordance indicates horizontal scrolling.
-- TTFT and availability charts stack vertically.
-- No label, value, or table column may resize the overall page width.
+- SideSheet 宽度：`100%`。
+- 整体指标保持稳定的三列布局，标签和数值都要紧凑。
+- 分组表保留桌面端列，并水平滚动。
+- 右侧渐隐或等效提示用于表示可水平滚动。
+- TTFT 图和可用性图垂直堆叠。
+- 任何标签、数值或表格列都不得撑大整个页面宽度。
 
-## 9. UI States
+## 9. UI 状态
 
-### 9.1 Loading
+### 9.1 加载中
 
-Show stable skeleton placeholders matching the final metric and chart dimensions. Loading must not resize the SideSheet or shift the tab bar.
+显示与最终指标和图表尺寸匹配的稳定骨架屏占位。加载状态不得改变 SideSheet 尺寸，也不得让标签栏跳动。
 
-### 9.2 No Data
+### 9.2 无数据
 
-When `overall.request_count` is zero or the response has no effective groups:
+当 `overall.request_count` 为零或响应中没有有效分组时：
 
-- Hide metric cards, group table, and charts.
-- Show `No performance data is available for this time range`.
-- Explain that only real Relay requests are collected.
-- Do not render misleading zero-valued metrics.
+- 隐藏指标卡片、分组表和图表。
+- 显示 `No performance data is available for this time range`。
+- 说明仅收集真实的 Relay 请求。
+- 不要渲染会误导用户的零值指标。
 
-### 9.3 Sparse Sample
+### 9.3 样本稀疏
 
-When `0 < overall.request_count < 10`:
+当 `0 < overall.request_count < 10` 时：
 
-- Render the real metrics and available charts.
-- Show a restrained warning with the current effective request count.
-- State that the values may fluctuate because the sample is small.
+- 渲染真实指标和可用图表。
+- 显示一条克制的警告，包含当前有效请求数。
+- 说明由于样本较小，这些值可能会波动。
 
-### 9.4 Error
+### 9.4 错误
 
-When the API request fails:
+当 API 请求失败时：
 
-- Show a performance-only error panel.
-- Provide a `Retry` action.
-- Preserve Overview and API tab usability.
-- Do not replace an already displayed successful dataset with a transient refresh error; retain it and show a non-blocking refresh warning instead.
+- 显示仅针对性能标签页的错误面板。
+- 提供 `Retry`（重试）操作。
+- 保留概览和 API 标签页的可用性。
+- 不要用短暂的刷新错误替换已经展示的成功数据集；应保留成功数据并显示非阻塞的刷新警告。
 
-### 9.5 Invalid Values
+### 9.5 无效值
 
-Non-finite or non-positive TPS and latency values display an em dash. Percentages are clamped to the valid display range of 0 to 100.
+非有限或非正的 TPS 和延迟值显示为破折号。百分比会被钳制到 0 到 100 的有效显示范围。
 
-## 10. Accessibility and Localization
+## 10. 可访问性与本地化
 
-- Tabs, retry, close, and time-range controls must be keyboard accessible.
-- The active tab and active time range must be programmatically identifiable.
-- Charts must have visible titles and text summaries; color cannot be the only success/failure signal.
-- Success, warning, and error colors use existing Semi UI semantic tokens.
-- All new visible strings are added to the localization files already maintained by `v0.13.2`.
-- Numeric formatting follows the current locale while API values remain locale-independent numbers.
+- 标签页、重试、关闭和时间范围控件必须支持键盘操作。
+- 活动标签页和活动时间范围必须可以通过程序识别。
+- 图表必须有可见标题和文字摘要；颜色不能成为唯一的成功/失败信号。
+- 成功、警告和错误颜色使用现有的 Semi UI 语义 token。
+- 所有新增可见文案都要加入 `v0.13.2` 已维护的本地化文件。
+- 数值格式遵循当前语言环境，但 API 值始终使用与语言环境无关的数字。
 
-## 11. Verification
+## 11. 验证
 
-### 11.1 Component and Hook Tests
+### 11.1 组件与 Hook 测试
 
-- Overview is the default tab.
-- No performance request occurs before Performance is opened.
-- `1h`, `24h`, and `7d` produce `hours=1`, `24`, and `168`.
-- Cached data is reused during the 60-second freshness window.
-- A stale request cannot overwrite the current model or range.
-- Loading, empty, sparse-sample, error, refresh-error, and success states render correctly.
-- Retry requests only the active performance dataset.
-- Metric formatting handles milliseconds, seconds, percentages, TPS, and invalid values.
+- 默认标签页为概览。
+- 打开性能标签页之前不得发起性能请求。
+- `1h`、`24h` 和 `7d` 分别产生 `hours=1`、`24` 和 `168`。
+- 在 60 秒新鲜度窗口内复用缓存数据。
+- 过期请求不能覆盖当前模型或当前时间范围的数据。
+- 加载、无数据、样本稀疏、错误、刷新错误和成功状态都能正确渲染。
+- 重试只重新请求当前性能数据集。
+- 指标格式化正确处理毫秒、秒、百分比、TPS 和无效值。
 
-### 11.2 Regression Checks
+### 11.2 回归检查
 
-- Basic model information remains visible in Overview.
-- Group pricing calculations and display are unchanged.
-- Dynamic billing expressions render as before.
-- Existing endpoint information remains visible in API.
-- Closing and reopening model details preserves existing page behavior.
+- 基础模型信息仍显示在概览中。
+- 分组价格的计算和显示保持不变。
+- 动态计费表达式保持原有展示行为。
+- 现有端点信息仍显示在 API 标签页中。
+- 关闭并重新打开模型详情时，保留现有页面行为。
 
-### 11.3 Responsive and Visual Checks
+### 11.3 响应式与视觉检查
 
-- Desktop screenshot at a representative 1440px-wide viewport.
-- Mobile screenshot at a representative 390px-wide viewport.
-- Horizontal group-table scrolling works on mobile.
-- Long model names, group names, localized labels, and large numeric values do not overlap.
-- Loading and state transitions do not shift the stable panel dimensions.
+- 在具有代表性的 `1440px` 宽桌面视口下截图检查。
+- 在具有代表性的 `390px` 宽移动视口下截图检查。
+- 移动端分组表格可以水平滚动。
+- 长模型名、长分组名、本地化标签和大数值不会重叠。
+- 加载和状态切换不会改变稳定的面板尺寸。
 
-### 11.4 Engineering Checks
+### 11.4 工程检查
 
-- Targeted frontend tests.
-- ESLint.
-- Vite production build.
-- Browser smoke test against the local `v0.13.2` backend with seeded performance data.
+- 运行针对性的前端测试。
+- 运行 ESLint。
+- 运行 Vite 生产构建。
+- 使用带种子性能数据的本地 `v0.13.2` 后端进行浏览器冒烟测试。
 
-## 12. Out of Scope
+## 12. 范围外事项
 
-- Backfilling performance data from historical logs.
-- Migrating the latest React, router, state, or query stack into `v0.13.2`.
-- Performance badges or rankings on every model card.
-- User-, token-, channel-, or request-level drill-down.
-- A performance comparison page across multiple models.
-- A new API playground inside model details.
+- 从历史日志回填性能数据。
+- 将最新版 React、路由、状态管理或查询技术栈迁移到 `v0.13.2`。
+- 在每张模型卡片上增加性能徽标或排名。
+- 按用户、令牌、渠道或请求下钻。
+- 跨多个模型的性能对比页面。
+- 在模型详情中新增 API playground（交互式试用台）。
 
-## 13. Acceptance Criteria
+## 13. 验收标准
 
-The frontend design is complete when:
+前端设计满足以下条件时视为完成：
 
-- All three tabs work without losing existing model-detail functionality.
-- Real performance data renders with statistically correct overall metrics.
-- `1h`, `24h`, and `7d` produce useful trend series.
-- Loading, empty, sparse, error, and success states are distinguishable.
-- Desktop and mobile layouts remain readable without incoherent overlap.
-- The frontend passes targeted tests, lint, build, and browser smoke checks.
+- 三个标签页全部可用，且不丢失任何现有模型详情功能。
+- 真实性能数据使用统计上正确的整体指标展示。
+- `1h`、`24h` 和 `7d` 都能产生有意义的趋势序列。
+- 加载、无数据、样本稀疏、错误和成功状态可以清晰区分。
+- 桌面端和移动端布局都保持可读，不出现不合理重叠。
+- 前端通过针对性测试、lint、构建和浏览器冒烟检查。
