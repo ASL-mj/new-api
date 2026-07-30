@@ -240,14 +240,15 @@ const Home = () => {
                     </Button>
                   ) : (
                     docsLink && (
-                      <Button
-                        size={isMobile ? 'default' : 'large'}
-                        className='flex items-center !rounded-3xl px-6 py-2'
-                        icon={<IconFile />}
-                        onClick={() => window.open(docsLink, '_blank')}
-                      >
-                        {t('文档')}
-                      </Button>
+                      <Link to='/docs'>
+                        <Button
+                          size={isMobile ? 'default' : 'large'}
+                          className='flex items-center !rounded-3xl px-6 py-2'
+                          icon={<IconFile />}
+                        >
+                          {t('文档')}
+                        </Button>
+                      </Link>
                     )
                   )}
                 </div>

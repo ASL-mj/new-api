@@ -36,6 +36,7 @@ import Text from '@douyinfe/semi-ui/lib/es/typography/text';
 
 const LEGAL_USER_AGREEMENT_KEY = 'legal.user_agreement';
 const LEGAL_PRIVACY_POLICY_KEY = 'legal.privacy_policy';
+const GENERAL_DOCS_LINK_KEY = 'general_setting.docs_link';
 
 const OtherSetting = () => {
   const { t } = useTranslation();
@@ -48,6 +49,7 @@ const OtherSetting = () => {
     Footer: '',
     About: '',
     HomePageContent: '',
+    [GENERAL_DOCS_LINK_KEY]: '',
   });
   let [loading, setLoading] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -59,17 +61,21 @@ const OtherSetting = () => {
 
   const updateOption = async (key, value) => {
     setLoading(true);
-    const res = await API.put('/api/option/', {
-      key,
-      value,
-    });
-    const { success, message } = res.data;
-    if (success) {
-      setInputs((inputs) => ({ ...inputs, [key]: value }));
-    } else {
+    try {
+      const res = await API.put('/api/option/', {
+        key,
+        value,
+      });
+      const { success, message } = res.data;
+      if (success) {
+        setInputs((inputs) => ({ ...inputs, [key]: value }));
+        return true;
+      }
       showError(message);
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const [loadingInput, setLoadingInput] = useState({
@@ -80,6 +86,7 @@ const OtherSetting = () => {
     Logo: false,
     HomePageContent: false,
     About: false,
+    [GENERAL_DOCS_LINK_KEY]: false,
     Footer: false,
     CheckUpdate: false,
   });
@@ -198,6 +205,37 @@ const OtherSetting = () => {
       setLoadingInput((loadingInput) => ({
         ...loadingInput,
         HomePageContent: false,
+      }));
+    }
+  };
+  // 个性化设置 - 文档地址
+  const submitDocsLink = async () => {
+    try {
+      setLoadingInput((loadingInput) => ({
+        ...loadingInput,
+        [GENERAL_DOCS_LINK_KEY]: true,
+      }));
+      const saved = await updateOption(
+        GENERAL_DOCS_LINK_KEY,
+        inputs[GENERAL_DOCS_LINK_KEY],
+      );
+      if (!saved) return;
+
+      statusDispatch({
+        type: 'set',
+        payload: {
+          ...statusState.status,
+          docs_link: inputs[GENERAL_DOCS_LINK_KEY],
+        },
+      });
+      showSuccess(t('保存成功'));
+    } catch (error) {
+      console.error('文档地址更新失败', error);
+      showError(t('保存失败，请重试'));
+    } finally {
+      setLoadingInput((loadingInput) => ({
+        ...loadingInput,
+        [GENERAL_DOCS_LINK_KEY]: false,
       }));
     }
   };
@@ -459,6 +497,19 @@ const OtherSetting = () => {
                 loading={loadingInput['HomePageContent']}
               >
                 {t('设置首页内容')}
+              </Button>
+              <Form.Input
+                label={t('文档地址')}
+                placeholder={t('例如 https://docs.newapi.pro')}
+                field={GENERAL_DOCS_LINK_KEY}
+                onChange={handleInputChange}
+                showClear
+              />
+              <Button
+                onClick={submitDocsLink}
+                loading={loadingInput[GENERAL_DOCS_LINK_KEY]}
+              >
+                {t('保存')}
               </Button>
               <Form.TextArea
                 label={t('关于')}
