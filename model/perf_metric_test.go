@@ -4,6 +4,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -12,11 +14,34 @@ import (
 func preparePerfMetricTable(t *testing.T) {
 	t.Helper()
 
-	require.NoError(t, DB.AutoMigrate(&PerfMetric{}))
-	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&PerfMetric{}).Error)
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousUsingSQLite := common.UsingSQLite
+	previousUsingMySQL := common.UsingMySQL
+	previousUsingPostgreSQL := common.UsingPostgreSQL
+
+	isolatedDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+
+	sqlDB, err := isolatedDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	DB = isolatedDB
+	LOG_DB = isolatedDB
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	require.NoError(t, isolatedDB.AutoMigrate(&PerfMetric{}))
 
 	t.Cleanup(func() {
-		_ = DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&PerfMetric{}).Error
+		DB = previousDB
+		LOG_DB = previousLogDB
+		common.UsingSQLite = previousUsingSQLite
+		common.UsingMySQL = previousUsingMySQL
+		common.UsingPostgreSQL = previousUsingPostgreSQL
+		_ = sqlDB.Close()
 	})
 }
 
