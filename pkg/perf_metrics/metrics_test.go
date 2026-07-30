@@ -73,6 +73,13 @@ func insertPerfMetric(t *testing.T, metric *model.PerfMetric) {
 	require.NoError(t, model.UpsertPerfMetric(metric))
 }
 
+func TestNormalizeHoursBounds(t *testing.T) {
+	assert.Equal(t, 24, normalizeHours(0))
+	assert.Equal(t, 24, normalizeHours(-3))
+	assert.Equal(t, 24, normalizeHours(24))
+	assert.Equal(t, 168, normalizeHours(999))
+}
+
 func TestQueryComputesWeightedAveragesAndRequestCounts(t *testing.T) {
 	preparePerfMetricsTestState(t, time.Unix(3600, 0).UTC())
 
@@ -219,7 +226,27 @@ func TestQueryUsesFiveMinuteRollupForOneHour(t *testing.T) {
 	assert.EqualValues(t, 3000, result.Groups[0].Series[0].Ts)
 	assert.EqualValues(t, 3300, result.Groups[0].Series[1].Ts)
 	assert.EqualValues(t, 3600, result.Groups[0].Series[2].Ts)
+	assert.EqualValues(t, 300, result.Groups[0].Series[1].Ts-result.Groups[0].Series[0].Ts)
+	assert.EqualValues(t, 300, result.Groups[0].Series[2].Ts-result.Groups[0].Series[1].Ts)
 	assert.EqualValues(t, 3, result.Overall.RequestCount)
+}
+
+func TestRecordUsesFixedThreeHundredSecondSourceBucket(t *testing.T) {
+	now := time.Unix(3671, 0).UTC()
+	preparePerfMetricsTestState(t, now)
+
+	Record(Sample{
+		Model:     "gpt-4o",
+		Group:     "alpha",
+		LatencyMs: 100,
+		Success:   true,
+	})
+
+	result, err := Query(QueryParams{Model: "gpt-4o", Hours: 1})
+	require.NoError(t, err)
+	require.Len(t, result.Groups, 1)
+	require.Len(t, result.Groups[0].Series, 1)
+	assert.EqualValues(t, 3600, result.Groups[0].Series[0].Ts)
 }
 
 func TestQueryUsesHourlyRollupForDayAndWeek(t *testing.T) {

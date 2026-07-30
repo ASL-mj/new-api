@@ -162,6 +162,8 @@ func Query(params QueryParams) (QueryResult, error) {
 		return true
 	})
 
+	// Redis only keeps a best-effort active-bucket mirror; single-instance query
+	// intentionally merges DB plus local hotBuckets only to avoid double counting.
 	return buildQueryResult(params, raw), nil
 }
 
@@ -275,10 +277,14 @@ func buildSeries(seriesCounters map[int64]counters) []BucketPoint {
 }
 
 func rollupSecondsForHours(hours int) int64 {
-	if hours <= 1 {
+	switch normalizeHours(hours) {
+	case 1:
 		return int64(perf_metrics_setting.GetBucketSeconds())
+	case 24, 168:
+		return hourSeconds
+	default:
+		return hourSeconds
 	}
-	return hourSeconds
 }
 
 func alignTimestamp(ts int64, seconds int64) int64 {
