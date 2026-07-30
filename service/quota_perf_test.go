@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -42,8 +41,6 @@ func captureQuotaMetrics(t *testing.T) chan relayMetricSample {
 	t.Helper()
 
 	originalRecord := recordRelayQuotaSample
-	originalLogConsumeEnabled := common.LogConsumeEnabled
-	originalBatchUpdateEnabled := common.BatchUpdateEnabled
 	originalDB := model.DB
 	originalLogDB := model.LOG_DB
 
@@ -57,15 +54,11 @@ func captureQuotaMetrics(t *testing.T) chan relayMetricSample {
 	model.LOG_DB = testDB
 	recorded := make(chan relayMetricSample, 1)
 
-	common.LogConsumeEnabled = false
-	common.BatchUpdateEnabled = false
 	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
 		recorded <- relayMetricSample{info: info, success: success, outputTokens: outputTokens}
 	}
 	t.Cleanup(func() {
 		recordRelayQuotaSample = originalRecord
-		common.LogConsumeEnabled = originalLogConsumeEnabled
-		common.BatchUpdateEnabled = originalBatchUpdateEnabled
 		model.DB = originalDB
 		model.LOG_DB = originalLogDB
 		_ = sqlDB.Close()
