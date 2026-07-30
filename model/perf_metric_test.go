@@ -156,6 +156,113 @@ func TestGetPerfMetricsByRange(t *testing.T) {
 	assert.EqualValues(t, 3, metrics[1].RequestCount)
 }
 
+func TestGetPerfMetricSummaryBucketsByRange(t *testing.T) {
+	preparePerfMetricTable(t)
+
+	for _, metric := range []*PerfMetric{
+		{
+			ModelName:      "gpt-5.4",
+			Group:          "default",
+			BucketTs:       300,
+			RequestCount:   1,
+			SuccessCount:   1,
+			TotalLatencyMs: 300,
+			OutputTokens:   20,
+			GenerationMs:   1000,
+		},
+		{
+			ModelName:      "gpt-5.4",
+			Group:          "vip",
+			BucketTs:       300,
+			RequestCount:   2,
+			SuccessCount:   1,
+			TotalLatencyMs: 600,
+			OutputTokens:   40,
+			GenerationMs:   2000,
+		},
+		{
+			ModelName:      "gpt-5.4",
+			Group:          "disabled",
+			BucketTs:       300,
+			RequestCount:   9,
+			SuccessCount:   9,
+			TotalLatencyMs: 900,
+			OutputTokens:   90,
+			GenerationMs:   9000,
+		},
+		{
+			ModelName:      "gpt-5.4-mini",
+			Group:          "default",
+			BucketTs:       600,
+			RequestCount:   4,
+			SuccessCount:   3,
+			TotalLatencyMs: 1200,
+			OutputTokens:   80,
+			GenerationMs:   4000,
+		},
+		{
+			ModelName:      "gpt-5.4",
+			Group:          "default",
+			BucketTs:       299,
+			RequestCount:   7,
+			SuccessCount:   6,
+			TotalLatencyMs: 700,
+			OutputTokens:   70,
+			GenerationMs:   7000,
+		},
+		{
+			ModelName:      "gpt-zero",
+			Group:          "default",
+			BucketTs:       600,
+			RequestCount:   0,
+			SuccessCount:   1,
+			TotalLatencyMs: 10,
+			OutputTokens:   1,
+			GenerationMs:   10,
+		},
+	} {
+		require.NoError(t, UpsertPerfMetric(metric))
+	}
+
+	summaries, err := GetPerfMetricSummaryBucketsByRange(300, 600, []string{"default", "vip"})
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+
+	assert.Equal(t, PerfMetricSummaryBucket{
+		ModelName:      "gpt-5.4",
+		BucketTs:       300,
+		RequestCount:   3,
+		SuccessCount:   2,
+		TotalLatencyMs: 900,
+		OutputTokens:   60,
+		GenerationMs:   3000,
+	}, summaries[0])
+
+	assert.Equal(t, PerfMetricSummaryBucket{
+		ModelName:      "gpt-5.4-mini",
+		BucketTs:       600,
+		RequestCount:   4,
+		SuccessCount:   3,
+		TotalLatencyMs: 1200,
+		OutputTokens:   80,
+		GenerationMs:   4000,
+	}, summaries[1])
+}
+
+func TestGetPerfMetricSummaryBucketsByRangeEmptyGroups(t *testing.T) {
+	preparePerfMetricTable(t)
+
+	previousDB := DB
+	DB = nil
+	t.Cleanup(func() {
+		DB = previousDB
+	})
+
+	summaries, err := GetPerfMetricSummaryBucketsByRange(300, 600, []string{})
+	require.NoError(t, err)
+	assert.Empty(t, summaries)
+}
+
 func TestDeleteExpiredPerfMetricsBoundary(t *testing.T) {
 	preparePerfMetricTable(t)
 

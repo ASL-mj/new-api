@@ -21,6 +21,16 @@ type PerfMetric struct {
 	GenerationMs   int64  `json:"generation_ms" gorm:"not null;default:0"`
 }
 
+type PerfMetricSummaryBucket struct {
+	ModelName      string `json:"model_name"`
+	BucketTs       int64  `json:"bucket_ts"`
+	RequestCount   int64  `json:"request_count"`
+	SuccessCount   int64  `json:"success_count"`
+	TotalLatencyMs int64  `json:"total_latency_ms"`
+	OutputTokens   int64  `json:"output_tokens"`
+	GenerationMs   int64  `json:"generation_ms"`
+}
+
 func (PerfMetric) TableName() string {
 	return "perf_metrics"
 }
@@ -67,6 +77,52 @@ func GetPerfMetricsByRange(modelName string, group string, startBucketTs int64, 
 	var metrics []*PerfMetric
 	err := tx.Find(&metrics).Error
 	return metrics, err
+}
+
+func GetPerfMetricSummaryBucketsByRange(startBucketTs int64, endBucketTs int64, groups []string) ([]PerfMetricSummaryBucket, error) {
+	if groups != nil && len(groups) == 0 {
+		return []PerfMetricSummaryBucket{}, nil
+	}
+
+	tx := DB.Model(&PerfMetric{}).Select([]string{
+		"model_name",
+		"bucket_ts",
+		"SUM(request_count) AS request_count",
+		"SUM(success_count) AS success_count",
+		"SUM(total_latency_ms) AS total_latency_ms",
+		"SUM(output_tokens) AS output_tokens",
+		"SUM(generation_ms) AS generation_ms",
+	})
+
+	if startBucketTs != 0 {
+		tx = tx.Where(clause.Gte{Column: clause.Column{Name: "bucket_ts"}, Value: startBucketTs})
+	}
+	if endBucketTs != 0 {
+		tx = tx.Where(clause.Lte{Column: clause.Column{Name: "bucket_ts"}, Value: endBucketTs})
+	}
+	if groups != nil {
+		tx = tx.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
+	}
+
+	var summaries []PerfMetricSummaryBucket
+	err := tx.Clauses(
+		clause.GroupBy{
+			Columns: []clause.Column{
+				{Name: "model_name"},
+				{Name: "bucket_ts"},
+			},
+			Having: []clause.Expression{
+				clause.Gt{Column: gorm.Expr("SUM(?)", clause.Column{Name: "request_count"}), Value: 0},
+			},
+		},
+		clause.OrderBy{
+			Columns: []clause.OrderByColumn{
+				{Column: clause.Column{Name: "model_name"}},
+				{Column: clause.Column{Name: "bucket_ts"}},
+			},
+		},
+	).Scan(&summaries).Error
+	return summaries, err
 }
 
 func DeleteExpiredPerfMetrics(expireBeforeBucketTs int64) (int64, error) {
