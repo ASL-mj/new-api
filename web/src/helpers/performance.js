@@ -51,6 +51,47 @@ export function formatPercentage(value) {
   return `${formatNumber(clamped, { maximumFractionDigits: 2 })}%`;
 }
 
+function formatCompactNumber(value) {
+  if (!isPositiveFinite(value)) return DASH;
+  return value > 1 ? String(Math.round(value)) : value.toFixed(1);
+}
+
+export function formatCompactLatency(ms) {
+  if (!isPositiveFinite(ms)) return DASH;
+  if (ms >= 1000) {
+    return `${formatCompactNumber(ms / 1000)}s`;
+  }
+  return `${formatCompactNumber(ms)}ms`;
+}
+
+export function formatCompactThroughput(tps) {
+  if (!isPositiveFinite(tps)) return DASH;
+  if (tps >= 1000) {
+    return `${formatCompactNumber(tps / 1000)}Kt`;
+  }
+  return `${formatCompactNumber(tps)}t`;
+}
+
+export function getSuccessRateLevel(rate) {
+  if (!Number.isFinite(rate)) return 'unknown';
+  if (rate >= 100) return 'excellent';
+  if (rate >= 90) return 'good';
+  if (rate >= 70) return 'warning';
+  return 'critical';
+}
+
+const SUCCESS_RATE_BAR_CLASS = {
+  excellent: 'bg-emerald-500',
+  good: 'bg-emerald-400',
+  warning: 'bg-amber-500',
+  critical: 'bg-red-500',
+  unknown: 'bg-gray-400',
+};
+
+export function getSuccessRateBarClass(rate) {
+  return SUCCESS_RATE_BAR_CLASS[getSuccessRateLevel(rate)];
+}
+
 export function formatChartTime(timestamp, hours) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return DASH;
   const date = new Date(timestamp * 1000);
