@@ -1,10 +1,15 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,5 +53,28 @@ func TestRecordFinalRelayFailureRecordsSingleAsyncFailure(t *testing.T) {
 	case sample := <-recorded:
 		t.Fatalf("unexpected extra relay failure metric: %+v", sample)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRelayValidationFailureDoesNotRecordPerformance(t *testing.T) {
+	original := recordRelayPerformanceSample
+	t.Cleanup(func() {
+		recordRelayPerformanceSample = original
+	})
+
+	recorded := make(chan struct{}, 1)
+	recordRelayPerformanceSample = func(*relaycommon.RelayInfo, bool, int64) {
+		recorded <- struct{}{}
+	}
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	Relay(ctx, types.RelayFormatOpenAI)
+
+	select {
+	case <-recorded:
+		t.Fatal("validation failure must not record a relay performance sample")
+	case <-time.After(100 * time.Millisecond):
 	}
 }

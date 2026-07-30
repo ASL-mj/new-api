@@ -1,100 +1,195 @@
 package service
 
 import (
+	"errors"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-func TestRecordTextQuotaMetricsUsesCompletionTokens(t *testing.T) {
-	original := recordRelayQuotaSample
+type relayMetricSample struct {
+	info         *relaycommon.RelayInfo
+	success      bool
+	outputTokens int64
+}
+
+type quotaMetricsTestBilling struct {
+	err         error
+	settleCalls int
+}
+
+func (b *quotaMetricsTestBilling) Settle(int) error {
+	b.settleCalls++
+	return b.err
+}
+
+func (b *quotaMetricsTestBilling) Refund(*gin.Context)      {}
+func (b *quotaMetricsTestBilling) NeedsRefund() bool        { return false }
+func (b *quotaMetricsTestBilling) GetPreConsumedQuota() int { return 0 }
+func (b *quotaMetricsTestBilling) Reserve(int) error        { return nil }
+
+func captureQuotaMetrics(t *testing.T) chan relayMetricSample {
+	t.Helper()
+
+	originalRecord := recordRelayQuotaSample
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalBatchUpdateEnabled := common.BatchUpdateEnabled
+	originalDB := model.DB
+	originalLogDB := model.LOG_DB
+
+	testDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := testDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, testDB.AutoMigrate(&model.User{}, &model.Channel{}, &model.Log{}))
+	model.DB = testDB
+	model.LOG_DB = testDB
+	recorded := make(chan relayMetricSample, 1)
+
+	common.LogConsumeEnabled = false
+	common.BatchUpdateEnabled = false
+	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+		recorded <- relayMetricSample{info: info, success: success, outputTokens: outputTokens}
+	}
 	t.Cleanup(func() {
-		recordRelayQuotaSample = original
+		recordRelayQuotaSample = originalRecord
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		common.BatchUpdateEnabled = originalBatchUpdateEnabled
+		model.DB = originalDB
+		model.LOG_DB = originalLogDB
+		_ = sqlDB.Close()
 	})
 
-	type relaySample struct {
-		info         *relaycommon.RelayInfo
-		success      bool
-		outputTokens int64
-	}
+	return recorded
+}
 
-	recorded := make(chan relaySample, 1)
-	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
-		recorded <- relaySample{info: info, success: success, outputTokens: outputTokens}
-	}
-
-	relayInfo := &relaycommon.RelayInfo{OriginModelName: "gpt-4.1", UsingGroup: "default"}
-	recordTextQuotaMetrics(relayInfo, textQuotaSummary{CompletionTokens: 37})
-
-	select {
-	case sample := <-recorded:
-		require.Same(t, relayInfo, sample.info)
-		require.True(t, sample.success)
-		require.EqualValues(t, 37, sample.outputTokens)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for text quota metric")
+func newQuotaMetricsRelayInfo(billing relaycommon.BillingSettler) *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		StartTime:       time.Now().Add(-time.Second),
+		OriginModelName: "gpt-4.1",
+		UsingGroup:      "default",
+		IsPlayground:    true,
+		Billing:         billing,
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		PriceData: types.PriceData{
+			ModelRatio:      0,
+			CompletionRatio: 1,
+			CacheRatio:      1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
 	}
 }
 
-func TestRecordAudioQuotaMetricsUsesCompletionTokens(t *testing.T) {
-	original := recordRelayQuotaSample
-	t.Cleanup(func() {
-		recordRelayQuotaSample = original
-	})
+func newQuotaMetricsContext() *gin.Context {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	return ctx
+}
 
-	type relaySample struct {
-		info         *relaycommon.RelayInfo
-		success      bool
-		outputTokens int64
-	}
-
-	recorded := make(chan relaySample, 1)
-	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
-		recorded <- relaySample{info: info, success: success, outputTokens: outputTokens}
-	}
-
-	relayInfo := &relaycommon.RelayInfo{OriginModelName: "whisper-1", UsingGroup: "default"}
-	recordAudioQuotaMetrics(relayInfo, &dto.Usage{CompletionTokens: 19})
+func requireRecordedRelayMetric(t *testing.T, recorded <-chan relayMetricSample, info *relaycommon.RelayInfo, outputTokens int64) {
+	t.Helper()
 
 	select {
 	case sample := <-recorded:
-		require.Same(t, relayInfo, sample.info)
+		require.Same(t, info, sample.info)
 		require.True(t, sample.success)
-		require.EqualValues(t, 19, sample.outputTokens)
+		require.EqualValues(t, outputTokens, sample.outputTokens)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for audio quota metric")
+		t.Fatal("timed out waiting for settled relay metric")
+	}
+
+	select {
+	case sample := <-recorded:
+		t.Fatalf("unexpected duplicate relay metric: %+v", sample)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
-func TestRecordRealtimeQuotaMetricsUsesOutputTokens(t *testing.T) {
-	original := recordRelayQuotaSample
-	t.Cleanup(func() {
-		recordRelayQuotaSample = original
-	})
-
-	type relaySample struct {
-		info         *relaycommon.RelayInfo
-		success      bool
-		outputTokens int64
-	}
-
-	recorded := make(chan relaySample, 1)
-	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
-		recorded <- relaySample{info: info, success: success, outputTokens: outputTokens}
-	}
-
-	relayInfo := &relaycommon.RelayInfo{OriginModelName: "gpt-realtime", UsingGroup: "default"}
-	recordRealtimeQuotaMetrics(relayInfo, &dto.RealtimeUsage{OutputTokens: 23})
+func requireNoRecordedRelayMetric(t *testing.T, recorded <-chan relayMetricSample) {
+	t.Helper()
 
 	select {
 	case sample := <-recorded:
-		require.Same(t, relayInfo, sample.info)
-		require.True(t, sample.success)
-		require.EqualValues(t, 23, sample.outputTokens)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for realtime quota metric")
+		t.Fatalf("unexpected relay metric after failed settlement: %+v", sample)
+	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+func TestPostTextConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {
+	t.Run("successful settlement records completion tokens once", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{}
+		info := newQuotaMetricsRelayInfo(billing)
+
+		PostTextConsumeQuota(newQuotaMetricsContext(), info, &dto.Usage{PromptTokens: 1, CompletionTokens: 37}, nil)
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireRecordedRelayMetric(t, recorded, info, 37)
+	})
+
+	t.Run("failed settlement does not record a success metric", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{err: errors.New("settlement failed")}
+
+		PostTextConsumeQuota(newQuotaMetricsContext(), newQuotaMetricsRelayInfo(billing), &dto.Usage{PromptTokens: 1, CompletionTokens: 37}, nil)
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireNoRecordedRelayMetric(t, recorded)
+	})
+}
+
+func TestPostAudioConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {
+	t.Run("successful settlement records completion tokens once", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{}
+		info := newQuotaMetricsRelayInfo(billing)
+
+		PostAudioConsumeQuota(newQuotaMetricsContext(), info, &dto.Usage{PromptTokens: 1, CompletionTokens: 19, TotalTokens: 20}, "")
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireRecordedRelayMetric(t, recorded, info, 19)
+	})
+
+	t.Run("failed settlement does not record a success metric", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{err: errors.New("settlement failed")}
+
+		PostAudioConsumeQuota(newQuotaMetricsContext(), newQuotaMetricsRelayInfo(billing), &dto.Usage{PromptTokens: 1, CompletionTokens: 19, TotalTokens: 20}, "")
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireNoRecordedRelayMetric(t, recorded)
+	})
+}
+
+func TestPostWssConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {
+	t.Run("successful settlement records output tokens once", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{}
+		info := newQuotaMetricsRelayInfo(billing)
+
+		PostWssConsumeQuota(newQuotaMetricsContext(), info, "gpt-realtime", &dto.RealtimeUsage{InputTokens: 1, OutputTokens: 23, TotalTokens: 24}, "")
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireRecordedRelayMetric(t, recorded, info, 23)
+	})
+
+	t.Run("failed settlement does not record a success metric", func(t *testing.T) {
+		recorded := captureQuotaMetrics(t)
+		billing := &quotaMetricsTestBilling{err: errors.New("settlement failed")}
+
+		PostWssConsumeQuota(newQuotaMetricsContext(), newQuotaMetricsRelayInfo(billing), "gpt-realtime", &dto.RealtimeUsage{InputTokens: 1, OutputTokens: 23, TotalTokens: 24}, "")
+
+		require.Equal(t, 1, billing.settleCalls)
+		requireNoRecordedRelayMetric(t, recorded)
+	})
 }
