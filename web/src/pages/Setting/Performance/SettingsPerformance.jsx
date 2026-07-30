@@ -72,6 +72,9 @@ export default function SettingsPerformance(props) {
     'performance_setting.monitor_cpu_threshold': 90,
     'performance_setting.monitor_memory_threshold': 90,
     'performance_setting.monitor_disk_threshold': 95,
+    'perf_metrics_setting.enabled': true,
+    'perf_metrics_setting.flush_interval': 5,
+    'perf_metrics_setting.retention_days': 30,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -386,6 +389,56 @@ export default function SettingsPerformance(props) {
                     'performance_setting.monitor_disk_threshold',
                   )}
                   disabled={!inputs['performance_setting.monitor_enabled']}
+                />
+              </Col>
+            </Row>
+            <Row>
+              <Button size='default' onClick={onSubmit}>
+                {t('保存性能设置')}
+              </Button>
+            </Row>
+          </Form.Section>
+
+          <Form.Section text={t('模型性能采集')}>
+            <Banner
+              type='info'
+              description={t(
+                '采集每个模型的请求量、成功率、延迟和令牌用量，用于后续统计分析。原始数据固定按 5 分钟时间桶采集，不支持调整时间桶粒度。',
+              )}
+              style={{ marginBottom: 16 }}
+            />
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Switch
+                  field={'perf_metrics_setting.enabled'}
+                  label={t('启用模型性能采集')}
+                  extraText={t('采集关闭后不再记录新的模型性能原始数据')}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={handleFieldChange('perf_metrics_setting.enabled')}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'perf_metrics_setting.flush_interval'}
+                  label={t('刷盘间隔 (分钟)')}
+                  extraText={t('将内存中的五分钟聚合结果写入数据库的间隔')}
+                  min={1}
+                  max={60}
+                  onChange={handleFieldChange('perf_metrics_setting.flush_interval')}
+                  disabled={!inputs['perf_metrics_setting.enabled']}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'perf_metrics_setting.retention_days'}
+                  label={t('数据保留天数')}
+                  extraText={t('超过保留期的原始数据将被自动清理')}
+                  min={1}
+                  max={3650}
+                  onChange={handleFieldChange('perf_metrics_setting.retention_days')}
+                  disabled={!inputs['perf_metrics_setting.enabled']}
                 />
               </Col>
             </Row>
