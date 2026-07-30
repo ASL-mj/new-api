@@ -25,6 +25,12 @@ const (
 var (
 	hotBuckets sync.Map
 	nowFunc    = time.Now
+	initOnce   sync.Once
+
+	queryFlushMu sync.RWMutex
+	startFlushFn = func() {
+		go flushLoop()
+	}
 
 	getPerfMetricsByRange    = model.GetPerfMetricsByRange
 	upsertPerfMetric         = model.UpsertPerfMetric
@@ -32,7 +38,7 @@ var (
 )
 
 func Init() {
-	go flushLoop()
+	initOnce.Do(startFlushFn)
 }
 
 func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
@@ -95,9 +101,15 @@ func Record(sample Sample) {
 		group:    sample.Group,
 		bucketTs: alignTimestamp(nowFunc().Unix(), int64(perf_metrics_setting.GetBucketSeconds())),
 	}
-	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
-	actual.(*atomicBucket).add(sample)
-	recordRedis(key, sample)
+	for {
+		actual, _ := hotBuckets.LoadOrStore(key, newHotBucket())
+		bucket := actual.(*hotBucket)
+		if bucket.add(sample) {
+			recordRedis(key, sample)
+			return
+		}
+		hotBuckets.CompareAndDelete(key, actual)
+	}
 }
 
 func Query(params QueryParams) (QueryResult, error) {
@@ -109,6 +121,9 @@ func Query(params QueryParams) (QueryResult, error) {
 	if params.Group != "" && !groupAllowed(params.Group, allowedGroups) {
 		return emptyQueryResult(params), nil
 	}
+
+	queryFlushMu.RLock()
+	defer queryFlushMu.RUnlock()
 
 	nowTs := nowFunc().Unix()
 	sourceBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
@@ -158,7 +173,7 @@ func Query(params QueryParams) (QueryResult, error) {
 		if !groupAllowed(k.group, allowedGroups) {
 			return true
 		}
-		mergeCounters(raw, k, value.(*atomicBucket).snapshot())
+		mergeCounters(raw, k, value.(*hotBucket).snapshot())
 		return true
 	})
 

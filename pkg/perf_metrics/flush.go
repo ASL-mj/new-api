@@ -26,22 +26,26 @@ func flushLoop() {
 
 func flushCompletedBuckets() {
 	currentBucketTs := alignTimestamp(nowFunc().Unix(), int64(perf_metrics_setting.GetBucketSeconds()))
+	queryFlushMu.Lock()
+	defer queryFlushMu.Unlock()
+
 	hotBuckets.Range(func(key, value any) bool {
-		bucket := key.(bucketKey)
-		if bucket.bucketTs >= currentBucketTs {
+		k := key.(bucketKey)
+		bucket := value.(*hotBucket)
+		if k.bucketTs >= currentBucketTs {
 			return true
 		}
 
-		drained := value.(*atomicBucket).drain()
+		drained := bucket.closeAndDrain()
+		hotBuckets.CompareAndDelete(key, value)
 		if drained.requestCount == 0 {
-			hotBuckets.Delete(key)
 			return true
 		}
 
 		err := upsertPerfMetric(&model.PerfMetric{
-			ModelName:      bucket.model,
-			Group:          bucket.group,
-			BucketTs:       bucket.bucketTs,
+			ModelName:      k.model,
+			Group:          k.group,
+			BucketTs:       k.bucketTs,
 			RequestCount:   drained.requestCount,
 			SuccessCount:   drained.successCount,
 			TotalLatencyMs: drained.totalLatencyMs,
@@ -51,14 +55,40 @@ func flushCompletedBuckets() {
 			GenerationMs:   drained.generationMs,
 		})
 		if err != nil {
-			value.(*atomicBucket).addCounters(drained)
+			restoreDrainedCounters(k, drained)
 			common.SysError("failed to flush perf metrics bucket: " + err.Error())
 			return true
 		}
 
-		hotBuckets.Delete(key)
 		return true
 	})
+}
+
+func restoreDrainedCounters(key bucketKey, drained counters) {
+	if drained.requestCount == 0 {
+		return
+	}
+
+	for {
+		current, ok := hotBuckets.Load(key)
+		if ok {
+			if current.(*hotBucket).addCounters(drained) {
+				return
+			}
+			hotBuckets.CompareAndDelete(key, current)
+			continue
+		}
+
+		replacement := newHotBucketWithCounters(drained)
+		actual, loaded := hotBuckets.LoadOrStore(key, replacement)
+		if !loaded {
+			return
+		}
+		if actual.(*hotBucket).addCounters(drained) {
+			return
+		}
+		hotBuckets.CompareAndDelete(key, actual)
+	}
 }
 
 func cleanupExpiredMetrics(retentionDays int) {

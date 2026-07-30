@@ -1,6 +1,6 @@
 package perfmetrics
 
-import "sync/atomic"
+import "sync"
 
 type Sample struct {
 	Model        string
@@ -67,78 +67,66 @@ type counters struct {
 	generationMs   int64
 }
 
-type atomicBucket struct {
-	requestCount   atomic.Int64
-	successCount   atomic.Int64
-	totalLatencyMs atomic.Int64
-	ttftSumMs      atomic.Int64
-	ttftCount      atomic.Int64
-	outputTokens   atomic.Int64
-	generationMs   atomic.Int64
+type hotBucket struct {
+	mu     sync.Mutex
+	data   counters
+	closed bool
 }
 
-func (b *atomicBucket) add(sample Sample) {
-	b.requestCount.Add(1)
-	if sample.Success {
-		b.successCount.Add(1)
+func newHotBucket() *hotBucket {
+	return &hotBucket{}
+}
+
+func newHotBucketWithCounters(value counters) *hotBucket {
+	return &hotBucket{data: value}
+}
+
+func (b *hotBucket) add(sample Sample) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
 	}
-	b.totalLatencyMs.Add(sample.LatencyMs)
+
+	b.data.requestCount++
+	if sample.Success {
+		b.data.successCount++
+	}
+	b.data.totalLatencyMs += sample.LatencyMs
 	if sample.HasTtft {
-		b.ttftSumMs.Add(sample.TtftMs)
-		b.ttftCount.Add(1)
+		b.data.ttftSumMs += sample.TtftMs
+		b.data.ttftCount++
 	}
 	if sample.OutputTokens > 0 {
-		b.outputTokens.Add(sample.OutputTokens)
+		b.data.outputTokens += sample.OutputTokens
 	}
 	if sample.GenerationMs > 0 {
-		b.generationMs.Add(sample.GenerationMs)
+		b.data.generationMs += sample.GenerationMs
 	}
+	return true
 }
 
-func (b *atomicBucket) snapshot() counters {
-	return counters{
-		requestCount:   b.requestCount.Load(),
-		successCount:   b.successCount.Load(),
-		totalLatencyMs: b.totalLatencyMs.Load(),
-		ttftSumMs:      b.ttftSumMs.Load(),
-		ttftCount:      b.ttftCount.Load(),
-		outputTokens:   b.outputTokens.Load(),
-		generationMs:   b.generationMs.Load(),
-	}
+func (b *hotBucket) snapshot() counters {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data
 }
 
-func (b *atomicBucket) drain() counters {
-	return counters{
-		requestCount:   b.requestCount.Swap(0),
-		successCount:   b.successCount.Swap(0),
-		totalLatencyMs: b.totalLatencyMs.Swap(0),
-		ttftSumMs:      b.ttftSumMs.Swap(0),
-		ttftCount:      b.ttftCount.Swap(0),
-		outputTokens:   b.outputTokens.Swap(0),
-		generationMs:   b.generationMs.Swap(0),
-	}
+func (b *hotBucket) closeAndDrain() counters {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	drained := b.data
+	b.data = counters{}
+	return drained
 }
 
-func (b *atomicBucket) addCounters(value counters) {
-	if value.requestCount != 0 {
-		b.requestCount.Add(value.requestCount)
+func (b *hotBucket) addCounters(value counters) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
 	}
-	if value.successCount != 0 {
-		b.successCount.Add(value.successCount)
-	}
-	if value.totalLatencyMs != 0 {
-		b.totalLatencyMs.Add(value.totalLatencyMs)
-	}
-	if value.ttftSumMs != 0 {
-		b.ttftSumMs.Add(value.ttftSumMs)
-	}
-	if value.ttftCount != 0 {
-		b.ttftCount.Add(value.ttftCount)
-	}
-	if value.outputTokens != 0 {
-		b.outputTokens.Add(value.outputTokens)
-	}
-	if value.generationMs != 0 {
-		b.generationMs.Add(value.generationMs)
-	}
+	b.data.add(value)
+	return true
 }
