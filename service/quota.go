@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -39,6 +40,8 @@ type QuotaInfo struct {
 	ModelRatio    float64
 	GroupRatio    float64
 }
+
+var recordRelayQuotaSample = perfmetrics.RecordRelaySample
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	defaultRatio, exists := ratio_setting.GetDefaultModelRatioMap()[modelName]
@@ -230,6 +233,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
+	recordRealtimeQuotaMetrics(relayInfo, usage)
 
 	logModel := modelName
 	if extraContent != "" {
@@ -351,6 +355,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
+	recordAudioQuotaMetrics(relayInfo, usage)
 
 	logModel := relayInfo.OriginModelName
 	if extraContent != "" {
@@ -375,6 +380,29 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+}
+
+func recordSuccessfulRelayQuota(relayInfo *relaycommon.RelayInfo, outputTokens int64) {
+	if relayInfo == nil {
+		return
+	}
+	gopool.Go(func() {
+		recordRelayQuotaSample(relayInfo, true, outputTokens)
+	})
+}
+
+func recordAudioQuotaMetrics(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) {
+	if usage == nil {
+		return
+	}
+	recordSuccessfulRelayQuota(relayInfo, int64(usage.CompletionTokens))
+}
+
+func recordRealtimeQuotaMetrics(relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) {
+	if usage == nil {
+		return
+	}
+	recordSuccessfulRelayQuota(relayInfo, int64(usage.OutputTokens))
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {

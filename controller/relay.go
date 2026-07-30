@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -30,6 +31,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+var recordRelayPerformanceSample = perfmetrics.RecordRelaySample
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	var err *types.NewAPIError
@@ -233,12 +236,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 	}
+	if newAPIError != nil {
+		recordFinalRelayFailure(relayInfo)
+	}
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+func recordFinalRelayFailure(relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil {
+		return
+	}
+	gopool.Go(func() {
+		recordRelayPerformanceSample(relayInfo, false, 0)
+	})
 }
 
 var upgrader = websocket.Upgrader{

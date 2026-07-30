@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
@@ -48,6 +49,7 @@ func main() {
 		common.FatalLog("failed to initialize resources: " + err.Error())
 		return
 	}
+	perfmetrics.Init()
 
 	common.SysLog("New API " + common.Version + " started")
 	if os.Getenv("GIN_MODE") != "debug" {
