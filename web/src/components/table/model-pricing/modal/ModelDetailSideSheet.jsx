@@ -17,16 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
-import { SideSheet, Typography, Button, Divider } from '@douyinfe/semi-ui';
+import React, { useEffect, useState } from 'react';
+import { SideSheet, Typography, TabPane, Tabs } from '@douyinfe/semi-ui';
 import { IconClose } from '@douyinfe/semi-icons';
 
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import ModelHeader from './components/ModelHeader';
-import ModelBasicInfo from './components/ModelBasicInfo';
-import ModelEndpoints from './components/ModelEndpoints';
-import ModelPricingTable from './components/ModelPricingTable';
-import DynamicPricingBreakdown from './components/DynamicPricingBreakdown';
+import ModelOverviewTab from './components/ModelOverviewTab';
+import ModelApiTab from './components/ModelApiTab';
+import ModelPerformancePanel from './components/ModelPerformancePanel';
 
 const { Text } = Typography;
 
@@ -47,6 +46,12 @@ const ModelDetailSideSheet = ({
   t,
 }) => {
   const isMobile = useIsMobile();
+  const [activeTab, setActiveTab] = useState('overview');
+  const modelName = modelData?.model_name || '';
+
+  useEffect(() => {
+    setActiveTab('overview');
+  }, [modelName, visible]);
 
   return (
     <SideSheet
@@ -61,68 +66,56 @@ const ModelDetailSideSheet = ({
         borderBottom: '1px solid var(--semi-color-border)',
       }}
       visible={visible}
-      width={isMobile ? '100%' : 600}
-      closeIcon={
-        <Button
-          className='semi-button-tertiary semi-button-size-small semi-button-borderless'
-          type='button'
-          icon={<IconClose />}
-          onClick={onClose}
-        />
-      }
+      width={isMobile ? '100%' : 760}
+      closeIcon={<IconClose />}
       onCancel={onClose}
     >
-      <div style={{ paddingTop: 16, paddingBottom: 16 }}>
+      <div style={{ padding: '0 24px 24px' }}>
         {!modelData && (
           <div className='flex justify-center items-center py-10'>
             <Text type='secondary'>{t('加载中...')}</Text>
           </div>
         )}
         {modelData && (
-          <>
-            <div style={{ padding: '0 24px' }}>
-              <ModelBasicInfo
-                modelData={modelData}
-                vendorsMap={vendorsMap}
-                t={t}
-              />
-            </div>
-            <Divider margin={16} />
-            <div style={{ padding: '0 24px' }}>
-              <ModelEndpoints
-                modelData={modelData}
-                endpointMap={endpointMap}
-                t={t}
-              />
-            </div>
-            {modelData.billing_mode === 'tiered_expr' && modelData.billing_expr && (
-              <>
-                <Divider margin={16} />
-                <div style={{ padding: '0 24px' }}>
-                  <DynamicPricingBreakdown
-                    billingExpr={modelData.billing_expr}
+          <Tabs type='line' activeKey={activeTab} onChange={setActiveTab}>
+            <TabPane tab={t('概览')} itemKey='overview'>
+              {activeTab === 'overview' && (
+                <div style={{ paddingTop: 16 }}>
+                  <ModelOverviewTab
+                    modelData={modelData}
+                    groupRatio={groupRatio}
+                    currency={currency}
+                    siteDisplayType={siteDisplayType}
+                    tokenUnit={tokenUnit}
+                    displayPrice={displayPrice}
+                    showRatio={showRatio}
+                    usableGroup={usableGroup}
+                    autoGroups={autoGroups}
+                    vendorsMap={vendorsMap}
                     t={t}
                   />
                 </div>
-              </>
-            )}
-            <Divider margin={16} />
-            <div style={{ padding: '0 24px' }}>
-              <ModelPricingTable
-                modelData={modelData}
-                groupRatio={groupRatio}
-                currency={currency}
-                siteDisplayType={siteDisplayType}
-                tokenUnit={tokenUnit}
-                displayPrice={displayPrice}
-                showRatio={showRatio}
-                usableGroup={usableGroup}
-                autoGroups={autoGroups}
-                t={t}
-              />
-            </div>
-            <Divider margin={16} />
-          </>
+              )}
+            </TabPane>
+            <TabPane tab={t('性能')} itemKey='performance'>
+              {activeTab === 'performance' && (
+                <div style={{ paddingTop: 16 }}>
+                  <ModelPerformancePanel modelName={modelName} t={t} />
+                </div>
+              )}
+            </TabPane>
+            <TabPane tab='API' itemKey='api'>
+              {activeTab === 'api' && (
+                <div style={{ paddingTop: 16 }}>
+                  <ModelApiTab
+                    modelData={modelData}
+                    endpointMap={endpointMap}
+                    t={t}
+                  />
+                </div>
+              )}
+            </TabPane>
+          </Tabs>
         )}
       </div>
     </SideSheet>
