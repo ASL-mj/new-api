@@ -57,13 +57,13 @@ func runCodexCredentialAutoRefreshOnce() {
 		return
 	}
 	defer codexCredentialRefreshRunning.Store(false)
-	common.MarkJobHeartbeat("codex_credential_refresh", "ok", "")
 
 	ctx := context.Background()
 	now := time.Now()
 
 	var refreshed int
 	var scanned int
+	var failed int
 
 	offset := 0
 	for {
@@ -80,6 +80,7 @@ func runCodexCredentialAutoRefreshOnce() {
 			Offset(offset).
 			Find(&channels).Error
 		if err != nil {
+			common.MarkJobHeartbeat("codex_credential_refresh", "error", "channel query failed")
 			logger.LogError(ctx, fmt.Sprintf("codex credential auto-refresh: query channels failed: %v", err))
 			return
 		}
@@ -122,6 +123,7 @@ func runCodexCredentialAutoRefreshOnce() {
 			newKey, _, err := RefreshCodexChannelCredential(refreshCtx, ch.Id, CodexCredentialRefreshOptions{ResetCaches: false})
 			cancel()
 			if err != nil {
+				failed++
 				logger.LogWarn(ctx, fmt.Sprintf("codex credential auto-refresh: channel_id=%d name=%s refresh failed: %v", ch.Id, ch.Name, err))
 				continue
 			}
@@ -132,15 +134,26 @@ func runCodexCredentialAutoRefreshOnce() {
 	}
 
 	if refreshed > 0 {
+		cacheFailed := false
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					cacheFailed = true
 					logger.LogWarn(ctx, fmt.Sprintf("codex credential auto-refresh: InitChannelCache panic: %v", r))
 				}
 			}()
 			model.InitChannelCache()
 		}()
 		ResetProxyClientCache()
+		if cacheFailed {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		common.MarkJobHeartbeat("codex_credential_refresh", "error", fmt.Sprintf("%d refresh operations failed", failed))
+	} else {
+		common.MarkJobHeartbeat("codex_credential_refresh", "ok", "")
 	}
 
 	if common.DebugEnabled {

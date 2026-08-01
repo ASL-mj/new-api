@@ -22,6 +22,7 @@ import { Banner, Card, Progress, Spin, Typography } from '@douyinfe/semi-ui';
 import {
   Cpu,
   Database,
+  HardDrive,
   ListChecks,
   MemoryStick,
   ScrollText,
@@ -96,6 +97,14 @@ const OpsSystemStatus = ({ system, systemLoading, systemError, t }) => {
       detail: `${t('空闲')} ${system?.idle || 0} · ${t('等待')} ${system?.wait_count || 0}`,
     },
     {
+      key: 'disk',
+      icon: <HardDrive size={16} />,
+      label: t('磁盘'),
+      value: system ? `${Number(system.disk_usage || 0).toFixed(1)}%` : '--',
+      detail: t('系统磁盘使用率'),
+      progress: system?.disk_usage,
+    },
+    {
       key: 'goroutines',
       icon: <Workflow size={16} />,
       label: t('Go 协程'),
@@ -136,7 +145,7 @@ const OpsSystemStatus = ({ system, systemLoading, systemError, t }) => {
           <Spin />
         </div>
       ) : (
-        <div className='grid grid-cols-2 xl:grid-cols-6'>
+        <div className='grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7'>
           {blocks.map((block) => (
             <StatusBlock key={block.key} {...block} />
           ))}

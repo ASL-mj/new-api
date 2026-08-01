@@ -14,6 +14,7 @@ import (
 const (
 	systemEventQueueSize  = 2048
 	systemEventBatchSize  = 100
+	systemEventBufferSize = 2048
 	systemEventFlushEvery = time.Second
 )
 
@@ -33,7 +34,9 @@ var (
 	systemEventWritten      atomic.Int64
 	systemEventDropped      atomic.Int64
 	systemEventWriteFailed  atomic.Int64
+	systemEventBuffered     atomic.Int64
 	systemEventInfoSequence atomic.Uint64
+	insertSystemEventLogs   = model.InsertSystemEventLogs
 )
 
 func StartSystemEventWriter() {
@@ -77,13 +80,17 @@ func shouldRecordSystemInfoEvent() bool {
 }
 
 func GetSystemEventWriterStats() SystemEventWriterStats {
+	capacity := 0
+	if systemEventQueue != nil {
+		capacity = cap(systemEventQueue) + systemEventBufferSize
+	}
 	return SystemEventWriterStats{
 		QueuedCount:      systemEventQueued.Load(),
 		WrittenCount:     systemEventWritten.Load(),
 		DroppedCount:     systemEventDropped.Load(),
 		WriteFailedCount: systemEventWriteFailed.Load(),
-		PendingCount:     len(systemEventQueue),
-		Capacity:         cap(systemEventQueue),
+		PendingCount:     len(systemEventQueue) + int(systemEventBuffered.Load()),
+		Capacity:         capacity,
 	}
 }
 
@@ -92,34 +99,57 @@ func systemEventWriterLoop() {
 	defer ticker.Stop()
 	batch := make([]model.SystemEventLog, 0, systemEventBatchSize)
 	lastCleanup := time.Time{}
-	flush := func() {
+	writeBlocked := false
+	flush := func() bool {
 		if len(batch) == 0 {
-			return
+			return true
 		}
-		if err := model.InsertSystemEventLogs(batch); err != nil {
-			systemEventWriteFailed.Add(1)
-			common.SysError("failed to write system event logs: " + err.Error())
-			batch = batch[:0]
-			return
+		var succeeded bool
+		batch, succeeded = flushSystemEventBatch(batch)
+		systemEventBuffered.Store(int64(len(batch)))
+		if !succeeded {
+			return false
 		}
-		systemEventWritten.Add(int64(len(batch)))
-		batch = batch[:0]
 		if lastCleanup.IsZero() || time.Since(lastCleanup) >= 24*time.Hour {
 			cleanupExpiredSystemEvents()
 			lastCleanup = time.Now()
 		}
+		return true
 	}
 	for {
 		select {
 		case event := <-systemEventQueue:
+			if len(batch) >= systemEventBufferSize {
+				systemEventDropped.Add(1)
+				continue
+			}
 			batch = append(batch, event)
-			if len(batch) >= systemEventBatchSize {
-				flush()
+			systemEventBuffered.Store(int64(len(batch)))
+			if !writeBlocked && len(batch) >= systemEventBatchSize {
+				writeBlocked = !flush()
 			}
 		case <-ticker.C:
-			flush()
+			writeBlocked = !flush()
 		}
 	}
+}
+
+func flushSystemEventBatch(batch []model.SystemEventLog) ([]model.SystemEventLog, bool) {
+	if len(batch) == 0 {
+		return batch, true
+	}
+	writeCount := len(batch)
+	if writeCount > systemEventBatchSize {
+		writeCount = systemEventBatchSize
+	}
+	if err := insertSystemEventLogs(batch[:writeCount]); err != nil {
+		systemEventWriteFailed.Add(1)
+		common.SysError("failed to write system event logs: " + err.Error())
+		return batch, false
+	}
+	systemEventWritten.Add(int64(writeCount))
+	copy(batch, batch[writeCount:])
+	return batch[:len(batch)-writeCount], true
 }
 
 func cleanupExpiredSystemEvents() {

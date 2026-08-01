@@ -49,7 +49,6 @@ func runSubscriptionQuotaResetOnce() {
 		return
 	}
 	defer subscriptionResetRunning.Store(false)
-	common.MarkJobHeartbeat("subscription_quota_reset", "ok", "")
 
 	ctx := context.Background()
 	totalReset := 0
@@ -57,6 +56,7 @@ func runSubscriptionQuotaResetOnce() {
 	for {
 		n, err := model.ExpireDueSubscriptions(subscriptionResetBatchSize)
 		if err != nil {
+			common.MarkJobHeartbeat("subscription_quota_reset", "error", "subscription expiry failed")
 			logger.LogWarn(ctx, fmt.Sprintf("subscription expire task failed: %v", err))
 			return
 		}
@@ -71,6 +71,7 @@ func runSubscriptionQuotaResetOnce() {
 	for {
 		n, err := model.ResetDueSubscriptions(subscriptionResetBatchSize)
 		if err != nil {
+			common.MarkJobHeartbeat("subscription_quota_reset", "error", "subscription quota reset failed")
 			logger.LogWarn(ctx, fmt.Sprintf("subscription quota reset task failed: %v", err))
 			return
 		}
@@ -84,10 +85,14 @@ func runSubscriptionQuotaResetOnce() {
 	}
 	lastCleanup := time.Unix(subscriptionCleanupLast.Load(), 0)
 	if time.Since(lastCleanup) >= subscriptionCleanupInterval {
-		if _, err := model.CleanupSubscriptionPreConsumeRecords(7 * 24 * 3600); err == nil {
-			subscriptionCleanupLast.Store(time.Now().Unix())
+		if _, err := model.CleanupSubscriptionPreConsumeRecords(7 * 24 * 3600); err != nil {
+			common.MarkJobHeartbeat("subscription_quota_reset", "error", "subscription cleanup failed")
+			logger.LogWarn(ctx, fmt.Sprintf("subscription cleanup task failed: %v", err))
+			return
 		}
+		subscriptionCleanupLast.Store(time.Now().Unix())
 	}
+	common.MarkJobHeartbeat("subscription_quota_reset", "ok", "")
 	if common.DebugEnabled && (totalReset > 0 || totalExpired > 0) {
 		logger.LogDebug(ctx, "subscription maintenance: reset_count=%d, expired_count=%d", totalReset, totalExpired)
 	}

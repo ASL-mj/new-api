@@ -17,6 +17,7 @@ import (
 )
 
 const monitorGroupSchedulerInterval = 5 * time.Second
+const monitorGroupRunLeaseDuration = 2 * time.Hour
 
 var errMonitorGroupRunning = errors.New("monitor group is already running")
 
@@ -48,6 +49,7 @@ var runningMonitorGroups sync.Map
 var monitorProbeFunc = probeChannel
 var monitorEndpointPingFunc = pingMonitorEndpointOrigin
 var recordMonitorSystemEvent = service.RecordSystemEvent
+var getEnabledMonitorGroups = model.GetEnabledMonitorGroups
 
 func isMonitorGroupRunning(groupId int) bool {
 	_, running := runningMonitorGroups.Load(groupId)
@@ -142,24 +144,31 @@ func monitorGroupScheduler(state *monitorGroupRunnerState) {
 }
 
 func runDueMonitorGroups(state *monitorGroupRunnerState) {
-	common.MarkJobHeartbeat("monitor_group_runner", "ok", "")
 	if !monitoring_setting.GetMonitoringSetting().Enabled {
 		return
 	}
-	groups, err := model.GetEnabledMonitorGroups()
+	groups, err := getEnabledMonitorGroups()
 	if err != nil {
+		common.MarkJobHeartbeat("monitor_group_runner", "error", "failed to load enabled monitor groups")
 		common.SysError("failed to load enabled monitor groups: " + err.Error())
 		return
 	}
 	now := time.Now().Unix()
+	failedGroups := 0
 	for _, group := range groups {
 		if group.LastCheckedAt > 0 && group.LastCheckedAt+int64(group.IntervalSeconds) > now {
 			continue
 		}
 		if err := scheduleMonitorGroupRunWithState(state, group); err != nil && !errors.Is(err, errMonitorGroupRunning) {
+			failedGroups++
 			common.SysError(fmt.Sprintf("failed to schedule monitor group %d: %v", group.Id, err))
 		}
 	}
+	if failedGroups > 0 {
+		common.MarkJobHeartbeat("monitor_group_runner", "error", fmt.Sprintf("failed_groups=%d", failedGroups))
+		return
+	}
+	common.MarkJobHeartbeat("monitor_group_runner", "ok", "")
 }
 
 func scheduleMonitorGroupRun(group *model.MonitorGroup) error {
@@ -179,8 +188,29 @@ func scheduleMonitorGroupRunWithState(state *monitorGroupRunnerState, group *mod
 	if _, loaded := runningMonitorGroups.LoadOrStore(group.Id, struct{}{}); loaded {
 		return errMonitorGroupRunning
 	}
+	leaseToken := common.GetUUID()
+	now := time.Now()
+	acquired, err := model.TryAcquireMonitorGroupRunLease(
+		group.Id,
+		leaseToken,
+		now.Unix(),
+		now.Add(monitorGroupRunLeaseDuration).Unix(),
+	)
+	if err != nil {
+		runningMonitorGroups.Delete(group.Id)
+		return err
+	}
+	if !acquired {
+		runningMonitorGroups.Delete(group.Id)
+		return errMonitorGroupRunning
+	}
 	go func() {
 		defer runningMonitorGroups.Delete(group.Id)
+		defer func() {
+			if err := model.ReleaseMonitorGroupRunLease(group.Id, leaseToken); err != nil {
+				common.SysError(fmt.Sprintf("failed to release monitor group %d run lease: %v", group.Id, err))
+			}
+		}()
 		runMonitorGroup(state, group)
 	}()
 	return nil

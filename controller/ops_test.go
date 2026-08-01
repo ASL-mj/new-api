@@ -12,6 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
+	"github.com/QuantumNous/new-api/setting/monitoring_setting"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +62,9 @@ func TestBuildOpsOverviewUsesRealMetricsAndStructuredAlerts(t *testing.T) {
 	require.NoError(t, model.DB.AutoMigrate(&model.SystemEventLog{}))
 
 	bucket := time.Now().Unix() / 60 * 60
+	previousNow := opsNowFunc
+	opsNowFunc = func() time.Time { return time.Unix(bucket+70, 0) }
+	t.Cleanup(func() { opsNowFunc = previousNow })
 	result := opsmetrics.MetricQueryResult{
 		Buckets: []model.OpsMetricBucket{
 			{
@@ -113,12 +118,12 @@ func TestBuildOpsOverviewUsesRealMetricsAndStructuredAlerts(t *testing.T) {
 	assert.Equal(t, 11.11, overview.ErrorRate)
 	assert.Equal(t, 12.5, overview.UpstreamRate)
 
-	assert.InDelta(t, 4.0/60.0, overview.QPS.Current, 1e-9)
-	assert.InDelta(t, 5.0/60.0, overview.QPS.Peak, 1e-9)
-	assert.InDelta(t, 4.5/60.0, overview.QPS.Average, 1e-9)
-	assert.Equal(t, 100.0, overview.TPS.Current)
-	assert.Equal(t, 200.0, overview.TPS.Peak)
-	assert.Equal(t, 150.0, overview.TPS.Average)
+	assert.InDelta(t, 4.0/11.0, overview.QPS.Current, 1e-9)
+	assert.InDelta(t, 4.0/11.0, overview.QPS.Peak, 1e-9)
+	assert.InDelta(t, (5.0/60.0+4.0/11.0)/2, overview.QPS.Average, 1e-9)
+	assert.InDelta(t, 100.0/11.0, overview.TPS.Current, 0.01)
+	assert.InDelta(t, 100.0/11.0, overview.TPS.Peak, 0.01)
+	assert.InDelta(t, (80.0/60.0+100.0/11.0)/2, overview.TPS.Average, 0.01)
 
 	require.NotNil(t, overview.TTFT.P50Ms)
 	require.NotNil(t, overview.Duration.P90Ms)
@@ -132,6 +137,13 @@ func TestBuildOpsOverviewUsesRealMetricsAndStructuredAlerts(t *testing.T) {
 	for _, alert := range overview.RecentAlerts {
 		assert.NotEqual(t, "info", alert.Level)
 	}
+}
+
+func TestOpsBucketDurationUsesFullHistoricalAndElapsedCurrentMinute(t *testing.T) {
+	now := time.Unix(10*60+14, 0)
+	assert.Equal(t, 60.0, opsBucketDurationSeconds(8*60, now))
+	assert.Equal(t, 15.0, opsBucketDurationSeconds(10*60, now))
+	assert.Equal(t, 1.0, opsBucketDurationSeconds(11*60, now))
 }
 
 func TestOpsPercentilesReturnNilWithoutSamples(t *testing.T) {
@@ -160,6 +172,10 @@ func TestOpsRequestHealthPenaltyIgnoresEmptySamples(t *testing.T) {
 }
 
 func TestBuildOpsBackgroundTaskSummaryClassifiesHeartbeats(t *testing.T) {
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	t.Setenv("CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "true")
 	now := time.Now()
 	summary := buildOpsBackgroundTaskSummary([]common.JobHeartbeat{
 		{Name: "monitor_group_runner", Status: "ok", UpdatedAt: now.Unix()},
@@ -167,14 +183,38 @@ func TestBuildOpsBackgroundTaskSummaryClassifiesHeartbeats(t *testing.T) {
 		{Name: "perf_metrics_flush", Status: "ok", UpdatedAt: now.Add(-time.Hour).Unix()},
 	}, now)
 
-	assert.Equal(t, len(opsJobHeartbeatMaxAges), summary.Total)
+	assert.Equal(t, len(expectedOpsJobHeartbeatMaxAges()), summary.Total)
 	assert.Equal(t, 1, summary.Healthy)
 	assert.Equal(t, 1, summary.Error)
-	assert.Equal(t, len(opsJobHeartbeatMaxAges)-2, summary.Stale)
+	assert.Equal(t, len(expectedOpsJobHeartbeatMaxAges())-2, summary.Stale)
+}
+
+func TestExpectedOpsJobsExcludeMasterOnlyAndDisabledCollectors(t *testing.T) {
+	previousMaster := common.IsMasterNode
+	previousMonitoring := *monitoring_setting.GetMonitoringSetting()
+	previousPerf := *perf_metrics_setting.GetPerfMetricsSetting()
+	t.Cleanup(func() {
+		common.IsMasterNode = previousMaster
+		*monitoring_setting.GetMonitoringSetting() = previousMonitoring
+		*perf_metrics_setting.GetPerfMetricsSetting() = previousPerf
+	})
+
+	common.IsMasterNode = false
+	monitoring_setting.GetMonitoringSetting().OpsEnabled = false
+	perf_metrics_setting.GetPerfMetricsSetting().Enabled = true
+
+	expected := expectedOpsJobHeartbeatMaxAges()
+	assert.Equal(t, map[string]time.Duration{
+		"perf_metrics_flush": opsJobHeartbeatMaxAges["perf_metrics_flush"],
+	}, expected)
 }
 
 func TestGetOpsSystemIncludesGoroutinesAndWriterStats(t *testing.T) {
 	prepareMonitorRunnerTables(t)
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	t.Setenv("CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "true")
 	common.MarkJobHeartbeat("monitor_group_runner", "ok", "")
 	common.MarkJobHeartbeat("ops_metrics_flush", "error", "flush failed")
 
@@ -183,7 +223,7 @@ func TestGetOpsSystemIncludesGoroutinesAndWriterStats(t *testing.T) {
 
 	assert.GreaterOrEqual(t, int(data["goroutines"].(float64)), 1)
 	backgroundTasks := data["background_tasks"].(map[string]any)
-	assert.EqualValues(t, len(opsJobHeartbeatMaxAges), backgroundTasks["total"])
+	assert.EqualValues(t, len(expectedOpsJobHeartbeatMaxAges()), backgroundTasks["total"])
 
 	writerStats := data["system_event_writer"].(map[string]any)
 	assert.EqualValues(t, 0, writerStats["pending_count"])
@@ -195,6 +235,71 @@ func TestOpsQueryRejectsInvalidRange(t *testing.T) {
 	recorder := performMonitorGroupRequest(t, http.MethodGet, "/api/ops/overview?start_timestamp=200&end_timestamp=100", "", GetOpsOverview)
 	response := decodeMonitorGroupResponse(t, recorder)
 	assert.False(t, response["success"].(bool))
+}
+
+func TestGetOpsDetailsPaginatesNewestFirstAndIncludesChannelName(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	channel := &model.Channel{Name: "Detail Channel", Key: "secret", Type: 1}
+	require.NoError(t, model.DB.Create(channel).Error)
+	for _, bucket := range []int64{120, 180} {
+		require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
+			BucketTs: bucket, ModelName: "gpt-5.4", Group: "default",
+			ChannelId: channel.Id, ChannelType: channel.Type,
+			RequestCount: 2, SuccessCount: 1, TtftSumMs: 40, TtftCount: 1,
+		}, nil))
+	}
+
+	response := performOpsRequest(
+		t,
+		"/api/ops/details?metric=ttft&start_timestamp=60&end_timestamp=240&p=1&page_size=1",
+		GetOpsDetails,
+	)
+	data := response["data"].(map[string]any)
+	page := data["page"].(map[string]any)
+	assert.EqualValues(t, 2, page["total"])
+	items := page["items"].([]any)
+	require.Len(t, items, 1)
+	row := items[0].(map[string]any)
+	assert.EqualValues(t, 180, row["bucket_ts"])
+	assert.Equal(t, "Detail Channel", row["channel_name"])
+
+	recorder := performMonitorGroupRequest(
+		t,
+		http.MethodGet,
+		"/api/ops/details?metric=invalid&start_timestamp=60&end_timestamp=240",
+		"",
+		GetOpsDetails,
+	)
+	invalid := decodeMonitorGroupResponse(t, recorder)
+	assert.False(t, invalid["success"].(bool))
+}
+
+func TestGetOpsTrendsReturnsChronologicalWallClockRates(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	previousNow := opsNowFunc
+	opsNowFunc = func() time.Time { return time.Unix(190, 0) }
+	t.Cleanup(func() { opsNowFunc = previousNow })
+	for _, bucket := range []model.OpsMetricBucket{
+		{BucketTs: 180, ModelName: "gpt-5.4", Group: "default", RequestCount: 11, OutputTokens: 22},
+		{BucketTs: 120, ModelName: "gpt-5.4", Group: "default", RequestCount: 60, OutputTokens: 120},
+	} {
+		require.NoError(t, model.UpsertOpsMetrics(bucket, nil))
+	}
+
+	response := performOpsRequest(
+		t,
+		"/api/ops/trends?start_timestamp=60&end_timestamp=240",
+		GetOpsTrends,
+	)
+	points := response["data"].(map[string]any)["points"].([]any)
+	require.Len(t, points, 2)
+	first := points[0].(map[string]any)
+	second := points[1].(map[string]any)
+	assert.EqualValues(t, 120, first["ts"])
+	assert.Equal(t, 1.0, first["qps"])
+	assert.EqualValues(t, 180, second["ts"])
+	assert.Equal(t, 1.0, second["qps"])
+	assert.Equal(t, 2.0, second["tps"])
 }
 
 func stringInt(value int64) string {

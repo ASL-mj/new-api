@@ -62,14 +62,14 @@ const SectionHeading = ({ icon: Icon, title, description, accent }) => (
   </div>
 );
 
-const ModelPerformanceCharts = ({ series = [], groupSeries = [], t }) => {
+const ModelPerformanceCharts = ({ series = [], t }) => {
   const chartId = useId();
 
   useEffect(() => {
     initVChartSemiTheme({ isWatchingThemeSwitch: true });
   }, []);
 
-  const chartSeries = buildPerformanceChartSeries(groupSeries);
+  const chartSeries = buildPerformanceChartSeries(series);
   const latencyData = chartSeries.latency.map((point) => ({
     ...point,
     time: formatChartTime(point.ts, MODEL_PERFORMANCE_HOURS),
@@ -78,11 +78,7 @@ const ModelPerformanceCharts = ({ series = [], groupSeries = [], t }) => {
     ...point,
     time: formatChartTime(point.ts, MODEL_PERFORMANCE_HOURS),
   }));
-  const incidents = countPerformanceIncidents(
-    groupSeries.length > 0
-      ? groupSeries.flatMap((group) => group.series || [])
-      : series,
-  );
+  const incidents = countPerformanceIncidents(series);
   const ttftSpec = {
     type: 'line',
     data: [{ id: `${chartId}-ttft`, values: latencyData }],
@@ -140,8 +136,7 @@ const ModelPerformanceCharts = ({ series = [], groupSeries = [], t }) => {
         size: 5,
         stroke: '#ffffff',
         lineWidth: 1.5,
-        fill: (datum) =>
-          getSuccessRateColor(datum.success_rate),
+        fill: (datum) => getSuccessRateColor(datum.success_rate),
       },
     },
     line: { style: { lineWidth: 2, stroke: '#10b981' }, connectNulls: false },

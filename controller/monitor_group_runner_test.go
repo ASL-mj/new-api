@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -244,6 +245,29 @@ func TestRunDueMonitorGroupsSchedulesWithoutManualTrigger(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !isMonitorGroupRunning(group.Id)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRunDueMonitorGroupsReportsQueryFailureInHeartbeat(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	previousGetter := getEnabledMonitorGroups
+	getEnabledMonitorGroups = func() ([]*model.MonitorGroup, error) {
+		return nil, errors.New("database unavailable")
+	}
+	t.Cleanup(func() { getEnabledMonitorGroups = previousGetter })
+
+	runDueMonitorGroups(newMonitorRunnerState(t, 1))
+
+	var heartbeat *common.JobHeartbeat
+	for _, item := range common.GetJobHeartbeats() {
+		if item.Name == "monitor_group_runner" {
+			copy := item
+			heartbeat = &copy
+			break
+		}
+	}
+	require.NotNil(t, heartbeat)
+	assert.Equal(t, "error", heartbeat.Status)
+	assert.Equal(t, "failed to load enabled monitor groups", heartbeat.Message)
 }
 
 func TestMonitorGroupRunnerPingsEachChannelOncePerRun(t *testing.T) {

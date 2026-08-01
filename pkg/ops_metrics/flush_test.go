@@ -184,3 +184,52 @@ func TestQueryChannelSuccessRateMergesPersistedAndCurrentBucket(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, empty)
 }
+
+func TestQueryChannelSuccessRatesAggregatesMultipleMonitorGroupsInOneQuery(t *testing.T) {
+	now := time.Unix(180, 0).UTC()
+	prepareOpsMetricsTestState(t, now)
+
+	require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
+		BucketTs: 120, ModelName: "gpt-5.4", Group: "default", ChannelId: 7,
+		ChannelType: 1, RequestCount: 4, SuccessCount: 3,
+	}, nil))
+	require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
+		BucketTs: 120, ModelName: "gpt-5.4", Group: "default", ChannelId: 8,
+		ChannelType: 1, RequestCount: 2, SuccessCount: 2,
+	}, nil))
+
+	rates, err := QueryChannelSuccessRates(map[int]ChannelSuccessRateQuery{
+		10: {ChannelIDs: []int{7}, Model: "gpt-5.4"},
+		20: {ChannelIDs: []int{7, 8}, Model: "gpt-5.4"},
+		30: {ChannelIDs: []int{9}, Model: "gpt-5.4"},
+	}, time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, rates[10])
+	require.NotNil(t, rates[20])
+	assert.Equal(t, 75.0, *rates[10])
+	assert.Equal(t, 83.33, *rates[20])
+	assert.Nil(t, rates[30])
+}
+
+func TestQueryChannelSuccessRatesFiltersEachGroupByModel(t *testing.T) {
+	now := time.Unix(180, 0).UTC()
+	prepareOpsMetricsTestState(t, now)
+	require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
+		BucketTs: 120, ModelName: "gpt-5.4", Group: "default", ChannelId: 7,
+		ChannelType: 1, RequestCount: 4, SuccessCount: 4,
+	}, nil))
+	require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
+		BucketTs: 120, ModelName: "gpt-5.5", Group: "default", ChannelId: 7,
+		ChannelType: 1, RequestCount: 4, SuccessCount: 0,
+	}, nil))
+
+	rates, err := QueryChannelSuccessRates(map[int]ChannelSuccessRateQuery{
+		10: {ChannelIDs: []int{7}, Model: "gpt-5.4"},
+		20: {ChannelIDs: []int{7}, Model: "gpt-5.5"},
+	}, time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, rates[10])
+	require.NotNil(t, rates[20])
+	assert.Equal(t, 100.0, *rates[10])
+	assert.Equal(t, 0.0, *rates[20])
+}

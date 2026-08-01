@@ -83,7 +83,7 @@ const MonitorStatusDetailModal = ({
               </div>
               <div>
                 <Typography.Text type='tertiary'>
-                  {t('真实请求成功率')}
+                  {t('主探测模型真实请求成功率')}
                 </Typography.Text>
                 <div className='mt-1 font-semibold'>
                   {selected.real_success_rate == null
@@ -96,7 +96,7 @@ const MonitorStatusDetailModal = ({
               <div className='mb-2 text-sm font-medium'>
                 {t('近 60 次记录')}
               </div>
-              <MonitorTimeline timeline={selected.timeline} />
+              <MonitorTimeline timeline={selected.timeline} t={t} />
             </div>
             <div>
               <div className='mb-2 text-sm font-medium'>{t('每日可用率')}</div>

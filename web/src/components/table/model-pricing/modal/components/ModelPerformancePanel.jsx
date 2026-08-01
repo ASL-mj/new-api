@@ -167,11 +167,7 @@ const ModelPerformancePanel = ({ modelName, t }) => {
           </div>
           <ModelPerformanceStats overall={overall} t={t} />
           <ModelPerformanceGroupTable groups={data.groups || []} t={t} />
-          <ModelPerformanceCharts
-            series={overall.series || []}
-            groupSeries={data.groups || []}
-            t={t}
-          />
+          <ModelPerformanceCharts series={overall.series || []} t={t} />
         </>
       )}
     </div>

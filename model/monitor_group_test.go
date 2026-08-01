@@ -67,6 +67,9 @@ func TestMonitorGroupCreateAndUpdateReplacesTargets(t *testing.T) {
 	group.Name = "Core upstreams revised"
 	group.LastCheckedAt = 999 // Request data must not overwrite scheduler state.
 	require.NoError(t, DB.Model(&MonitorGroup{}).Where("id = ?", group.Id).Update("last_checked_at", int64(777)).Error)
+	require.NoError(t, DB.Model(&MonitorGroup{}).Where("id = ?", group.Id).Updates(map[string]interface{}{
+		"run_lease_until": int64(888), "run_lease_token": "active-lease",
+	}).Error)
 	require.NoError(t, UpdateMonitorGroup(group, []int{2, 5}))
 
 	updated, err := GetMonitorGroupById(group.Id)
@@ -74,11 +77,43 @@ func TestMonitorGroupCreateAndUpdateReplacesTargets(t *testing.T) {
 	assert.Equal(t, "core-upstreams", updated.Key)
 	assert.Equal(t, "Core upstreams revised", updated.Name)
 	assert.EqualValues(t, 777, updated.LastCheckedAt)
+	assert.EqualValues(t, 888, updated.RunLeaseUntil)
+	assert.Equal(t, "active-lease", updated.RunLeaseToken)
 
 	targets, err = GetMonitorGroupTargets(group.Id)
 	require.NoError(t, err)
 	require.Len(t, targets, 2)
 	assert.Equal(t, []int{2, 5}, []int{targets[0].ChannelId, targets[1].ChannelId})
+}
+
+func TestMonitorGroupRunLeaseIsExclusiveAndTokenGuarded(t *testing.T) {
+	prepareMonitorTables(t)
+	group := &MonitorGroup{Name: "Lease", Key: "lease", PrimaryModel: "gpt-5.4", Enabled: true}
+	require.NoError(t, CreateMonitorGroup(group, []int{1}))
+
+	acquired, err := TryAcquireMonitorGroupRunLease(group.Id, "runner-a", 100, 200)
+	require.NoError(t, err)
+	assert.True(t, acquired)
+
+	acquired, err = TryAcquireMonitorGroupRunLease(group.Id, "runner-b", 150, 250)
+	require.NoError(t, err)
+	assert.False(t, acquired)
+
+	require.NoError(t, ReleaseMonitorGroupRunLease(group.Id, "runner-b"))
+	persisted, err := GetMonitorGroupById(group.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "runner-a", persisted.RunLeaseToken)
+
+	acquired, err = TryAcquireMonitorGroupRunLease(group.Id, "runner-b", 200, 300)
+	require.NoError(t, err)
+	assert.True(t, acquired)
+
+	// An older runner must not release a lease that has already been reclaimed.
+	require.NoError(t, ReleaseMonitorGroupRunLease(group.Id, "runner-a"))
+	persisted, err = GetMonitorGroupById(group.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "runner-b", persisted.RunLeaseToken)
+	require.NoError(t, ReleaseMonitorGroupRunLease(group.Id, "runner-b"))
 }
 
 func TestMonitorGroupUpdateRejectsKeyChangeWithoutReplacingTargets(t *testing.T) {

@@ -26,6 +26,8 @@ type MonitorGroup struct {
 	CreatedAt       int64  `json:"created_at" gorm:"bigint;index"`
 	UpdatedAt       int64  `json:"updated_at" gorm:"bigint"`
 	LastCheckedAt   int64  `json:"last_checked_at" gorm:"bigint;index"`
+	RunLeaseUntil   int64  `json:"-" gorm:"bigint;not null;default:0;index"`
+	RunLeaseToken   string `json:"-" gorm:"size:64;not null;default:''"`
 }
 
 type MonitorGroupTarget struct {
@@ -102,6 +104,8 @@ func CreateMonitorGroup(group *MonitorGroup, channelIds []int) error {
 	group.CreatedAt = now
 	group.UpdatedAt = now
 	group.LastCheckedAt = 0
+	group.RunLeaseUntil = 0
+	group.RunLeaseToken = ""
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(group).Error; err != nil {
 			return err
@@ -146,6 +150,8 @@ func UpdateMonitorGroup(group *MonitorGroup, channelIds []int) error {
 		group.CreatedAt = existing.CreatedAt
 		group.UpdatedAt = common.GetTimestamp()
 		group.LastCheckedAt = existing.LastCheckedAt
+		group.RunLeaseUntil = existing.RunLeaseUntil
+		group.RunLeaseToken = existing.RunLeaseToken
 		if err := tx.Save(group).Error; err != nil {
 			return err
 		}
@@ -157,6 +163,31 @@ func UpdateMonitorGroup(group *MonitorGroup, channelIds []int) error {
 		}
 		return tx.Create(&targets).Error
 	})
+}
+
+func TryAcquireMonitorGroupRunLease(id int, token string, now, leaseUntil int64) (bool, error) {
+	if id <= 0 || token == "" || leaseUntil <= now {
+		return false, errors.New("invalid monitor group run lease")
+	}
+	result := DB.Model(&MonitorGroup{}).
+		Where("id = ? AND run_lease_until <= ?", id, now).
+		Updates(map[string]interface{}{
+			"run_lease_until": leaseUntil,
+			"run_lease_token": token,
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func ReleaseMonitorGroupRunLease(id int, token string) error {
+	if id <= 0 || token == "" {
+		return nil
+	}
+	return DB.Model(&MonitorGroup{}).
+		Where("id = ? AND run_lease_token = ?", id, token).
+		Updates(map[string]interface{}{
+			"run_lease_until": int64(0),
+			"run_lease_token": "",
+		}).Error
 }
 
 func DeleteMonitorGroup(id int) error {

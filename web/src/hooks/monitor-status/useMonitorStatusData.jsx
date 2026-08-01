@@ -37,16 +37,19 @@ export const useMonitorStatusData = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshAfter, setRefreshAfter] = useState(AUTO_REFRESH_SECONDS);
   const autoRefreshPendingRef = useRef(false);
+  const requestSequenceRef = useRef({ status: 0, detail: 0 });
   const [selected, setSelected] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   const loadStatus = useCallback(
     async ({ silent = false } = {}) => {
+      const sequence = ++requestSequenceRef.current.status;
       if (!silent) setLoading(true);
       try {
         const response = await API.get('/api/monitor_status/', {
           params: { days },
         });
+        if (sequence !== requestSequenceRef.current.status) return false;
         if (!response.data?.success) {
           showError(response.data?.message || t('分组状态加载失败'));
           return false;
@@ -54,12 +57,14 @@ export const useMonitorStatusData = () => {
         setGroups(response.data.data || []);
         return true;
       } catch (error) {
-        if (!silent) {
+        if (sequence === requestSequenceRef.current.status && !silent) {
           showError(error.response?.data?.message || t('分组状态加载失败'));
         }
         return false;
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && sequence === requestSequenceRef.current.status) {
+          setLoading(false);
+        }
       }
     },
     [days, t],
@@ -78,31 +83,50 @@ export const useMonitorStatusData = () => {
   };
 
   const openDetails = async (group) => {
+    const sequence = ++requestSequenceRef.current.detail;
     setSelected(group);
     setDetailLoading(true);
     try {
       const response = await API.get(`/api/monitor_status/${group.id}`, {
         params: { days },
       });
+      if (sequence !== requestSequenceRef.current.detail) return;
       if (response.data?.success) {
         setSelected(response.data.data);
       } else {
         showError(response.data?.message || t('分组详情加载失败'));
       }
     } catch (error) {
-      showError(error.response?.data?.message || t('分组详情加载失败'));
+      if (sequence === requestSequenceRef.current.detail) {
+        showError(error.response?.data?.message || t('分组详情加载失败'));
+      }
     } finally {
-      setDetailLoading(false);
+      if (sequence === requestSequenceRef.current.detail) {
+        setDetailLoading(false);
+      }
     }
   };
 
-  const closeDetails = () => setSelected(null);
+  const closeDetails = () => {
+    requestSequenceRef.current.detail++;
+    setSelected(null);
+    setDetailLoading(false);
+  };
 
   useEffect(() => {
+    requestSequenceRef.current.detail++;
     setSelected(null);
     setRefreshAfter(AUTO_REFRESH_SECONDS);
     loadStatus();
   }, [loadStatus]);
+
+  useEffect(
+    () => () => {
+      requestSequenceRef.current.status++;
+      requestSequenceRef.current.detail++;
+    },
+    [],
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => {

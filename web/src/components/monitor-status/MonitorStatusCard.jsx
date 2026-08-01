@@ -55,12 +55,14 @@ const MetricPair = ({ primary, secondary, t }) => {
           </div>
           <div className='mt-1 truncate text-base font-bold tabular-nums'>
             {item.value}
-            <span
-              className='ml-1 text-xs font-normal'
-              style={{ color: 'var(--semi-color-text-2)' }}
-            >
-              ms
-            </span>
+            {item.value !== '--' && (
+              <span
+                className='ml-1 text-xs font-normal'
+                style={{ color: 'var(--semi-color-text-2)' }}
+              >
+                ms
+              </span>
+            )}
           </div>
         </div>
       ))}
@@ -171,7 +173,7 @@ const MonitorStatusCard = ({ group, onOpen, t, refreshAfter }) => {
           <span>{t('近 60 次记录')}</span>
           <span>{formatMonitorRefresh(refreshAfter)}</span>
         </div>
-        <MonitorTimeline timeline={group.timeline} />
+        <MonitorTimeline timeline={group.timeline} t={t} />
       </div>
     </Card>
   );

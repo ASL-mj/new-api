@@ -177,42 +177,28 @@ export function countPerformanceIncidents(series = []) {
   }).length;
 }
 
-export function buildPerformanceChartSeries(groups = []) {
-  const latencyByTs = new Map();
-  const availabilityByTs = new Map();
-
-  for (const group of groups) {
-    for (const point of group?.series || []) {
-      const ts = Number(point?.ts);
-      if (!Number.isFinite(ts) || ts <= 0) continue;
-
-      const ttft = Number(point?.avg_ttft_ms);
-      if (Number.isFinite(ttft) && ttft >= 0) {
-        const values = latencyByTs.get(ts) || [];
-        values.push(ttft);
-        latencyByTs.set(ts, values);
-      }
-
-      const successRate = Number(point?.success_rate);
-      if (Number.isFinite(successRate)) {
-        const values = availabilityByTs.get(ts) || [];
-        values.push(Math.min(100, Math.max(0, successRate)));
-        availabilityByTs.set(ts, values);
-      }
-    }
-  }
-
-  const averageEntries = (entries, valueKey) =>
-    Array.from(entries.entries())
-      .sort(([left], [right]) => left - right)
-      .map(([ts, values]) => ({
-        ts,
-        [valueKey]:
-          values.reduce((sum, value) => sum + value, 0) / values.length,
-      }));
+export function buildPerformanceChartSeries(series = []) {
+  const points = series
+    .filter(
+      (point) =>
+        Number.isFinite(Number(point?.ts)) &&
+        Number(point.ts) > 0 &&
+        Number(point?.request_count) > 0,
+    )
+    .sort((left, right) => Number(left.ts) - Number(right.ts));
 
   return {
-    latency: averageEntries(latencyByTs, 'avg_ttft_ms'),
-    availability: averageEntries(availabilityByTs, 'success_rate'),
+    latency: points
+      .filter((point) => Number(point.avg_ttft_ms) > 0)
+      .map((point) => ({
+        ts: Number(point.ts),
+        avg_ttft_ms: Number(point.avg_ttft_ms),
+      })),
+    availability: points
+      .filter((point) => Number.isFinite(Number(point.success_rate)))
+      .map((point) => ({
+        ts: Number(point.ts),
+        success_rate: Math.min(100, Math.max(0, Number(point.success_rate))),
+      })),
   };
 }

@@ -192,7 +192,7 @@ export const useOpsData = () => {
   );
 
   const loadLogs = useCallback(
-    async ({ silent = false, page = logPage } = {}) => {
+    async ({ silent = false, page = 1 } = {}) => {
       const sequence = ++sequenceRef.current.logs;
       if (!silent) setLogsLoading(true);
       setLogsError('');
@@ -228,46 +228,49 @@ export const useOpsData = () => {
         }
       }
     },
-    [logFilters, logPage, t],
+    [logFilters, t],
   );
 
-  const loadDetails = async (metric, page = 1) => {
-    const sequence = ++sequenceRef.current.details;
-    setDetailsLoading(true);
-    try {
-      const response = await API.get('/api/ops/details', {
-        params: {
-          ...toOpsParams(filters),
-          metric: metric.key,
-          p: page,
-          page_size: 20,
-        },
-      });
-      if (sequence !== sequenceRef.current.details) return;
-      if (!response.data?.success) {
-        showError(response.data?.message || t('指标明细加载失败'));
-        return;
+  const loadDetails = useCallback(
+    async (metric, page = 1) => {
+      const sequence = ++sequenceRef.current.details;
+      setDetailsLoading(true);
+      try {
+        const response = await API.get('/api/ops/details', {
+          params: {
+            ...toOpsParams(filters),
+            metric: metric.key,
+            p: page,
+            page_size: 20,
+          },
+        });
+        if (sequence !== sequenceRef.current.details) return;
+        if (!response.data?.success) {
+          showError(response.data?.message || t('指标明细加载失败'));
+          return;
+        }
+        const pageData = response.data.data?.page || {};
+        setDetailData({
+          items: pageData.items || [],
+          total: pageData.total || 0,
+        });
+        setDetailPage(pageData.page || page);
+      } catch (error) {
+        if (sequence === sequenceRef.current.details) {
+          showError(error.response?.data?.message || t('指标明细加载失败'));
+        }
+      } finally {
+        if (sequence === sequenceRef.current.details) setDetailsLoading(false);
       }
-      const pageData = response.data.data?.page || {};
-      setDetailData({
-        items: pageData.items || [],
-        total: pageData.total || 0,
-      });
-      setDetailPage(pageData.page || page);
-    } catch (error) {
-      if (sequence === sequenceRef.current.details) {
-        showError(error.response?.data?.message || t('指标明细加载失败'));
-      }
-    } finally {
-      if (sequence === sequenceRef.current.details) setDetailsLoading(false);
-    }
-  };
+    },
+    [filters, t],
+  );
 
   const openDetail = (metric) => {
+    sequenceRef.current.details++;
     setDetailMetric(metric);
     setDetailData({ items: [], total: 0 });
     setDetailPage(1);
-    loadDetails(metric, 1);
   };
 
   const closeDetail = () => {
@@ -300,7 +303,6 @@ export const useOpsData = () => {
 
   const handleLogPageChange = (page) => {
     setLogPage(page);
-    loadLogs({ page });
   };
 
   const refresh = async () => {
@@ -309,7 +311,7 @@ export const useOpsData = () => {
       loadOverview({ silent: true }),
       loadSystem({ silent: true }),
       loadRankings({ silent: true }),
-      loadLogs({ silent: true }),
+      loadLogs({ silent: true, page: logPage }),
     ]);
     setRefreshing(false);
   };
@@ -324,8 +326,14 @@ export const useOpsData = () => {
   }, [loadSystem]);
 
   useEffect(() => {
-    loadLogs();
-  }, [loadLogs]);
+    loadLogs({ page: logPage });
+  }, [loadLogs, logPage]);
+
+  useEffect(() => {
+    if (!detailMetric) return;
+    setDetailPage(1);
+    loadDetails(detailMetric, 1);
+  }, [detailMetric, loadDetails]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

@@ -145,13 +145,21 @@ func buildUserMonitorGroupSummaries(groups []*model.MonitorGroup, days int) ([]U
 	for _, check := range checks {
 		checksByGroup[check.MonitorGroupId] = append(checksByGroup[check.MonitorGroupId], check)
 	}
+	successRateQueries := make(map[int]opsmetrics.ChannelSuccessRateQuery, len(groups))
+	for _, group := range groups {
+		successRateQueries[group.Id] = opsmetrics.ChannelSuccessRateQuery{
+			ChannelIDs: channelIDsByGroup[group.Id],
+			Model:      group.PrimaryModel,
+		}
+	}
+	realSuccessRates, err := opsmetrics.QueryChannelSuccessRates(successRateQueries, 24*time.Hour)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	for index, group := range groups {
 		groupChecks := checksByGroup[group.Id]
-		realSuccessRate, err := opsmetrics.QueryChannelSuccessRate(channelIDsByGroup[group.Id], 24*time.Hour)
-		if err != nil {
-			return nil, err
-		}
+		freshChecks := currentMonitorChecks(groupChecks, group, now)
 		availability7d := monitorAvailabilityForDays(groupChecks, now, 7)
 		availability15d := monitorAvailabilityForDays(groupChecks, now, 15)
 		availability30d := monitorAvailabilityForDays(groupChecks, now, 30)
@@ -165,12 +173,12 @@ func buildUserMonitorGroupSummaries(groups []*model.MonitorGroup, days int) ([]U
 		summaries[index] = UserMonitorGroupSummary{
 			Id:                 group.Id,
 			Name:               group.Name,
-			Status:             summarizeMonitorStatus(groupChecks),
+			Status:             summarizeMonitorStatus(freshChecks),
 			PrimaryModel:       group.PrimaryModel,
 			ChannelTypes:       monitorTypesForChannelIds(channelIDsByGroup[group.Id], channelById),
-			CurrentLatencyMs:   averageCurrentModelLatency(groupChecks, group.PrimaryModel),
-			CurrentPingLatency: averageCurrentPingLatency(groupChecks, group.PrimaryModel),
-			RealSuccessRate:    realSuccessRate,
+			CurrentLatencyMs:   averageCurrentModelLatency(freshChecks, group.PrimaryModel),
+			CurrentPingLatency: averageCurrentPingLatency(freshChecks, group.PrimaryModel),
+			RealSuccessRate:    realSuccessRates[group.Id],
 			Availability7d:     availability7d,
 			Availability15d:    availability15d,
 			Availability30d:    availability30d,
@@ -180,6 +188,24 @@ func buildUserMonitorGroupSummaries(groups []*model.MonitorGroup, days int) ([]U
 		}
 	}
 	return summaries, nil
+}
+
+func currentMonitorChecks(checks []*model.MonitorCheck, group *model.MonitorGroup, now int64) []*model.MonitorCheck {
+	if group == nil {
+		return []*model.MonitorCheck{}
+	}
+	freshFor := int64(group.IntervalSeconds + group.TimeoutSeconds)
+	if freshFor < 15 {
+		freshFor = 15
+	}
+	cutoff := now - freshFor
+	fresh := make([]*model.MonitorCheck, 0, len(checks))
+	for _, check := range checks {
+		if check != nil && check.CheckedAt >= cutoff {
+			fresh = append(fresh, check)
+		}
+	}
+	return fresh
 }
 
 func parseUserMonitorStatusDays(value string) (int, error) {

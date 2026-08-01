@@ -96,7 +96,7 @@ const MonitorStatusTable = ({ groups, loading, onOpen, t }) => {
       key: 'timeline',
       render: (timeline) => (
         <div className='w-48'>
-          <MonitorTimeline timeline={timeline} />
+          <MonitorTimeline timeline={timeline} t={t} />
         </div>
       ),
     },

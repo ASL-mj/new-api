@@ -34,6 +34,7 @@ export const useModelPricingData = () => {
   const [selectedGroup, setSelectedGroup] = useState('all');
   const [showModelDetail, setShowModelDetail] = useState(false);
   const [selectedModel, setSelectedModel] = useState(null);
+  const modelDetailCloseTimerRef = useRef(null);
   const [filterGroup, setFilterGroup] = useState('all'); // 用于 Table 的可用分组筛选，"all" 表示不过滤
   const [filterQuotaType, setFilterQuotaType] = useState('all'); // 计费类型筛选: 'all' | 0 | 1
   const [filterEndpointType, setFilterEndpointType] = useState('all'); // 端点类型筛选: 'all' | string
@@ -304,16 +305,33 @@ export const useModelPricingData = () => {
   };
 
   const openModelDetail = (model) => {
+    if (modelDetailCloseTimerRef.current) {
+      window.clearTimeout(modelDetailCloseTimerRef.current);
+      modelDetailCloseTimerRef.current = null;
+    }
     setSelectedModel(model);
     setShowModelDetail(true);
   };
 
   const closeModelDetail = () => {
     setShowModelDetail(false);
-    setTimeout(() => {
+    if (modelDetailCloseTimerRef.current) {
+      window.clearTimeout(modelDetailCloseTimerRef.current);
+    }
+    modelDetailCloseTimerRef.current = window.setTimeout(() => {
       setSelectedModel(null);
+      modelDetailCloseTimerRef.current = null;
     }, 300);
   };
+
+  useEffect(
+    () => () => {
+      if (modelDetailCloseTimerRef.current) {
+        window.clearTimeout(modelDetailCloseTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     refresh().then();

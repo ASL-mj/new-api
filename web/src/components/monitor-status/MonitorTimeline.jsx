@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 
 import {
+  getMonitorStatusMeta,
   monitorTimelineHeight,
   padMonitorTimeline,
 } from './monitorTimelineUtils';
@@ -38,29 +39,46 @@ const pointColor = (status) => {
   }
 };
 
-const MonitorTimeline = ({ timeline }) => (
-  <div>
-    <div className='flex h-5 items-end gap-px' aria-label='近 60 次探测记录'>
-      {padMonitorTimeline(timeline).map((point, index) => (
-        <span
-          key={`${point.checked_at ?? 'empty'}-${index}`}
-          className='min-w-0 flex-1 rounded-sm'
-          style={{
-            height: `${monitorTimelineHeight(point.status)}%`,
-            backgroundColor: pointColor(point.status),
-          }}
-          title={point.status === 'empty' ? '暂无记录' : point.status}
-        />
-      ))}
+const MonitorTimeline = ({ timeline, t }) => {
+  const points = padMonitorTimeline(timeline);
+  const recordedCount = points.filter(
+    (point) => point.status !== 'empty',
+  ).length;
+  return (
+    <div>
+      <div
+        className='flex h-5 items-end gap-px'
+        role='img'
+        aria-label={t('近 60 次探测记录，共 {{count}} 条有效记录', {
+          count: recordedCount,
+        })}
+      >
+        {points.map((point, index) => (
+          <span
+            key={`${point.checked_at ?? 'empty'}-${index}`}
+            className='min-w-0 flex-1 rounded-sm'
+            style={{
+              height: `${monitorTimelineHeight(point.status)}%`,
+              backgroundColor: pointColor(point.status),
+            }}
+            title={
+              point.status === 'empty'
+                ? t('暂无记录')
+                : t(getMonitorStatusMeta(point.status).label)
+            }
+            aria-hidden='true'
+          />
+        ))}
+      </div>
+      <div
+        className='mt-1 flex justify-between text-xs'
+        style={{ color: 'var(--semi-color-text-2)' }}
+      >
+        <span>{t('过去')}</span>
+        <span>{t('现在')}</span>
+      </div>
     </div>
-    <div
-      className='mt-1 flex justify-between text-xs'
-      style={{ color: 'var(--semi-color-text-2)' }}
-    >
-      <span>past</span>
-      <span>now</span>
-    </div>
-  </div>
-);
+  );
+};
 
 export default MonitorTimeline;

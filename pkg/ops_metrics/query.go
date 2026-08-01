@@ -27,6 +27,11 @@ type MetricQueryResult struct {
 	Histograms []model.OpsMetricHistogram
 }
 
+type ChannelSuccessRateQuery struct {
+	ChannelIDs []int
+	Model      string
+}
+
 // QueryMetrics merges persisted buckets with the local hot buckets. Callers
 // receive only aggregate records and never individual API requests.
 func QueryMetrics(query MetricQuery) (MetricQueryResult, error) {
@@ -129,14 +134,40 @@ func metricQueryMatchesKey(query MetricQuery, key bucketKey) bool {
 // QueryChannelSuccessRate returns the final-request success rate for the given
 // channels. A nil result means there are no real request samples in the window.
 func QueryChannelSuccessRate(channelIDs []int, duration time.Duration) (*float64, error) {
-	channelSet := make(map[int]struct{}, len(channelIDs))
-	for _, channelID := range channelIDs {
-		if channelID > 0 {
+	rates, err := QueryChannelSuccessRates(map[int]ChannelSuccessRateQuery{
+		0: {ChannelIDs: channelIDs},
+	}, duration)
+	if err != nil {
+		return nil, err
+	}
+	return rates[0], nil
+}
+
+// QueryChannelSuccessRates computes success rates for multiple channel sets
+// with one persisted-bucket query, avoiding one database round trip per group.
+func QueryChannelSuccessRates(channelGroups map[int]ChannelSuccessRateQuery, duration time.Duration) (map[int]*float64, error) {
+	rates := make(map[int]*float64, len(channelGroups))
+	channelToGroups := make(map[int][]int)
+	modelByGroup := make(map[int]string, len(channelGroups))
+	channelSet := make(map[int]struct{})
+	for groupID, query := range channelGroups {
+		rates[groupID] = nil
+		modelByGroup[groupID] = query.Model
+		seen := make(map[int]struct{}, len(query.ChannelIDs))
+		for _, channelID := range query.ChannelIDs {
+			if channelID <= 0 {
+				continue
+			}
+			if _, exists := seen[channelID]; exists {
+				continue
+			}
+			seen[channelID] = struct{}{}
 			channelSet[channelID] = struct{}{}
+			channelToGroups[channelID] = append(channelToGroups[channelID], groupID)
 		}
 	}
 	if len(channelSet) == 0 {
-		return nil, nil
+		return rates, nil
 	}
 	if duration <= 0 {
 		duration = 24 * time.Hour
@@ -158,28 +189,43 @@ func QueryChannelSuccessRate(channelIDs []int, duration time.Duration) (*float64
 		return nil, err
 	}
 
-	var total counters
+	totals := make(map[int]counters, len(channelGroups))
 	for _, row := range rows {
-		total.add(counters{
-			requestCount: row.RequestCount,
-			successCount: row.SuccessCount,
-		})
+		for _, groupID := range channelToGroups[row.ChannelId] {
+			if model := modelByGroup[groupID]; model != "" && row.ModelName != model {
+				continue
+			}
+			total := totals[groupID]
+			total.add(counters{requestCount: row.RequestCount, successCount: row.SuccessCount})
+			totals[groupID] = total
+		}
 	}
 	hotBuckets.Range(func(key, value any) bool {
 		bucketKey := key.(bucketKey)
 		if bucketKey.bucketTs < startBucketTs || bucketKey.bucketTs > endBucketTs {
 			return true
 		}
-		if _, ok := channelSet[bucketKey.channelId]; !ok {
+		groupIDs := channelToGroups[bucketKey.channelId]
+		if len(groupIDs) == 0 {
 			return true
 		}
-		total.add(value.(*hotBucket).snapshot())
+		for _, groupID := range groupIDs {
+			if model := modelByGroup[groupID]; model != "" && bucketKey.model != model {
+				continue
+			}
+			total := totals[groupID]
+			total.add(value.(*hotBucket).snapshot())
+			totals[groupID] = total
+		}
 		return true
 	})
 
-	if total.requestCount == 0 {
-		return nil, nil
+	for groupID, total := range totals {
+		if total.requestCount == 0 {
+			continue
+		}
+		rate := math.Round(float64(total.successCount)*10000/float64(total.requestCount)) / 100
+		rates[groupID] = &rate
 	}
-	rate := math.Round(float64(total.successCount)*10000/float64(total.requestCount)) / 100
-	return &rate, nil
+	return rates, nil
 }

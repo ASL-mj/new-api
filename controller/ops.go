@@ -14,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/monitoring_setting"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,6 +29,8 @@ var opsJobHeartbeatMaxAges = map[string]time.Duration{
 	"codex_credential_refresh": 30 * time.Minute,
 	"channel_upstream_update":  2 * time.Hour,
 }
+
+var opsNowFunc = time.Now
 
 type opsAggregate struct {
 	requestCount         int64
@@ -85,9 +89,32 @@ func GetOpsDetails(c *gin.Context) {
 		common.ApiErrorMsg(c, "invalid metric")
 		return
 	}
+	channelIDs := make([]int, 0)
+	channelSet := make(map[int]struct{})
+	for _, bucket := range result.Buckets {
+		if bucket.ChannelId <= 0 {
+			continue
+		}
+		if _, exists := channelSet[bucket.ChannelId]; exists {
+			continue
+		}
+		channelSet[bucket.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, bucket.ChannelId)
+	}
+	channelNames := make(map[int]string, len(channelIDs))
+	if len(channelIDs) > 0 {
+		channels, err := model.GetChannelsByIds(channelIDs)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		for _, channel := range channels {
+			channelNames[channel.Id] = channel.Name
+		}
+	}
 	rows := make([]dto.OpsDetailRow, 0, len(result.Buckets))
 	for _, bucket := range result.Buckets {
-		rows = append(rows, opsDetailRow(bucket))
+		rows = append(rows, opsDetailRow(bucket, channelNames))
 	}
 	sort.Slice(rows, func(left, right int) bool {
 		if rows[left].BucketTs == rows[right].BucketTs {
@@ -300,6 +327,7 @@ func buildOpsOverview(result opsmetrics.MetricQueryResult) dto.OpsOverview {
 }
 
 func buildOpsRatePoints(buckets []model.OpsMetricBucket) []dto.OpsRatePoint {
+	now := opsNowFunc()
 	byTimestamp := make(map[int64]opsAggregate)
 	for _, bucket := range buckets {
 		aggregate := byTimestamp[bucket.BucketTs]
@@ -314,21 +342,41 @@ func buildOpsRatePoints(buckets []model.OpsMetricBucket) []dto.OpsRatePoint {
 	points := make([]dto.OpsRatePoint, 0, len(timestamps))
 	for _, timestamp := range timestamps {
 		aggregate := byTimestamp[timestamp]
+		durationSeconds := opsBucketDurationSeconds(timestamp, now)
 		points = append(points, dto.OpsRatePoint{
 			Ts: timestamp, RequestCount: aggregate.requestCount, OutputTokens: aggregate.outputTokens,
-			QPS: float64(aggregate.requestCount) / 60,
-			TPS: tokensPerSecond(aggregate.outputTokens, aggregate.generationMs),
+			QPS: float64(aggregate.requestCount) / durationSeconds,
+			TPS: ratePerSecond(aggregate.outputTokens, durationSeconds),
 			SLA: sla(aggregate), ErrorRate: percentage(opsErrorCount(aggregate), aggregate.requestCount),
 		})
 	}
 	return points
 }
 
-func opsDetailRow(bucket model.OpsMetricBucket) dto.OpsDetailRow {
+func opsBucketDurationSeconds(bucketTs int64, now time.Time) float64 {
+	currentBucketTs := now.Unix() - now.Unix()%60
+	if bucketTs < currentBucketTs {
+		return 60
+	}
+	if bucketTs > currentBucketTs {
+		return 1
+	}
+	elapsed := now.Unix() - currentBucketTs + 1
+	if elapsed < 1 {
+		return 1
+	}
+	if elapsed > 60 {
+		return 60
+	}
+	return float64(elapsed)
+}
+
+func opsDetailRow(bucket model.OpsMetricBucket, channelNames map[int]string) dto.OpsDetailRow {
 	aggregate := opsAggregate{}
 	aggregate.add(bucket)
 	return dto.OpsDetailRow{
-		BucketTs: bucket.BucketTs, ModelName: bucket.ModelName, Group: bucket.Group, ChannelId: bucket.ChannelId, ChannelType: bucket.ChannelType,
+		BucketTs: bucket.BucketTs, ModelName: bucket.ModelName, Group: bucket.Group,
+		ChannelId: bucket.ChannelId, ChannelName: channelNameForOps(bucket.ChannelId, channelNames), ChannelType: bucket.ChannelType,
 		RequestCount: aggregate.requestCount, SuccessCount: aggregate.successCount, SLA: sla(aggregate),
 		ErrorRate: percentage(aggregate.requestCount-aggregate.successCount, aggregate.requestCount), UpstreamErrors: aggregate.upstreamErrorCount,
 		AvgTtftMs: average(aggregate.ttftSumMs, aggregate.ttftCount), AvgDurationMs: average(aggregate.totalLatencyMs, aggregate.requestCount),
@@ -401,12 +449,13 @@ func buildOpsTPSSummary(points []dto.OpsRatePoint) dto.OpsRateSummary {
 }
 
 func buildOpsBackgroundTaskSummary(heartbeats []common.JobHeartbeat, now time.Time) dto.OpsBackgroundTaskSummary {
-	summary := dto.OpsBackgroundTaskSummary{Total: len(opsJobHeartbeatMaxAges)}
+	expectedJobs := expectedOpsJobHeartbeatMaxAges()
+	summary := dto.OpsBackgroundTaskSummary{Total: len(expectedJobs)}
 	heartbeatByName := make(map[string]common.JobHeartbeat, len(heartbeats))
 	for _, heartbeat := range heartbeats {
 		heartbeatByName[heartbeat.Name] = heartbeat
 	}
-	for jobName, maxAge := range opsJobHeartbeatMaxAges {
+	for jobName, maxAge := range expectedJobs {
 		heartbeat, exists := heartbeatByName[jobName]
 		if !exists || heartbeat.UpdatedAt == 0 || now.Sub(time.Unix(heartbeat.UpdatedAt, 0)) > maxAge {
 			summary.Stale++
@@ -419,6 +468,28 @@ func buildOpsBackgroundTaskSummary(heartbeats []common.JobHeartbeat, now time.Ti
 		summary.Healthy++
 	}
 	return summary
+}
+
+func expectedOpsJobHeartbeatMaxAges() map[string]time.Duration {
+	expected := make(map[string]time.Duration, len(opsJobHeartbeatMaxAges))
+	if monitoring_setting.GetMonitoringSetting().OpsEnabled {
+		expected["ops_metrics_flush"] = opsJobHeartbeatMaxAges["ops_metrics_flush"]
+	}
+	if perf_metrics_setting.GetPerfMetricsSetting().Enabled {
+		expected["perf_metrics_flush"] = opsJobHeartbeatMaxAges["perf_metrics_flush"]
+	}
+	if !common.IsMasterNode {
+		return expected
+	}
+	if monitoring_setting.GetMonitoringSetting().Enabled {
+		expected["monitor_group_runner"] = opsJobHeartbeatMaxAges["monitor_group_runner"]
+	}
+	expected["subscription_quota_reset"] = opsJobHeartbeatMaxAges["subscription_quota_reset"]
+	expected["codex_credential_refresh"] = opsJobHeartbeatMaxAges["codex_credential_refresh"]
+	if common.GetEnvOrDefaultBool("CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", true) {
+		expected["channel_upstream_update"] = opsJobHeartbeatMaxAges["channel_upstream_update"]
+	}
+	return expected
 }
 
 func recentOpsAlerts(limit int) []dto.OpsAlertItem {
@@ -475,6 +546,13 @@ func tokensPerSecond(tokens, generationMs int64) float64 {
 	return math.Round(float64(tokens)*100000/float64(generationMs)) / 100
 }
 
+func ratePerSecond(value int64, seconds float64) float64 {
+	if value <= 0 || seconds <= 0 {
+		return 0
+	}
+	return math.Round(float64(value)/seconds*100) / 100
+}
+
 func channelNameForOps(channelID int, names map[int]string) string {
 	if channelID == 0 {
 		return "未分配渠道"
@@ -509,11 +587,9 @@ func opsHealthScore(overview dto.OpsOverview) int {
 	} else if status.MemoryUsage >= float64(config.MemoryThreshold)*0.8 {
 		score -= 5
 	}
-	for jobName, maxAge := range opsJobHeartbeatMaxAges {
-		if common.IsJobHeartbeatStale(jobName, maxAge) {
-			score -= 10
-			break
-		}
+	taskSummary := buildOpsBackgroundTaskSummary(common.GetJobHeartbeats(), opsNowFunc())
+	if taskSummary.Error > 0 || taskSummary.Stale > 0 {
+		score -= 10
 	}
 	if score < 0 {
 		return 0

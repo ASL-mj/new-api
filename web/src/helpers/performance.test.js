@@ -56,9 +56,7 @@ describe('model card performance formatting', () => {
   test('pads the latest three status buckets from the left', () => {
     expect(normalizeRecentSuccessRates([])).toEqual([null, null, null]);
     expect(normalizeRecentSuccessRates([100])).toEqual([null, null, 100]);
-    expect(normalizeRecentSuccessRates([10, 20, 30, 40])).toEqual([
-      20, 30, 40,
-    ]);
+    expect(normalizeRecentSuccessRates([10, 20, 30, 40])).toEqual([20, 30, 40]);
   });
 
   test('uses the newer uptime severity heights', () => {
@@ -107,30 +105,29 @@ describe('model card performance formatting', () => {
     ).toBe(1);
   });
 
-  test('keeps all hourly buckets when building chart points like newer NewAPI', () => {
+  test('keeps complete hourly data but plots only buckets with real requests', () => {
     const charts = buildPerformanceChartSeries([
       {
-        series: [
-          { ts: 100, request_count: 0, avg_ttft_ms: 0, success_rate: 0 },
-          { ts: 200, request_count: 2, avg_ttft_ms: 1000, success_rate: 80 },
-        ],
+        ts: 100,
+        request_count: 0,
+        avg_ttft_ms: 0,
+        success_rate: 0,
       },
       {
-        series: [
-          { ts: 200, request_count: 3, avg_ttft_ms: 3000, success_rate: 100 },
-          { ts: 300, request_count: 1, avg_ttft_ms: 500, success_rate: 50 },
-        ],
+        ts: 200,
+        request_count: 5,
+        avg_ttft_ms: 2200,
+        success_rate: 92,
       },
+      { ts: 300, request_count: 1, avg_ttft_ms: 500, success_rate: 50 },
     ]);
 
     expect(charts.latency).toEqual([
-      { ts: 100, avg_ttft_ms: 0 },
-      { ts: 200, avg_ttft_ms: 2000 },
+      { ts: 200, avg_ttft_ms: 2200 },
       { ts: 300, avg_ttft_ms: 500 },
     ]);
     expect(charts.availability).toEqual([
-      { ts: 100, success_rate: 0 },
-      { ts: 200, success_rate: 90 },
+      { ts: 200, success_rate: 92 },
       { ts: 300, success_rate: 50 },
     ]);
   });

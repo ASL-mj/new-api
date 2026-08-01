@@ -520,7 +520,6 @@ func buildUpstreamModelUpdateTaskNotificationContent(
 }
 
 func runChannelUpstreamModelUpdateTaskOnce() {
-	common.MarkJobHeartbeat("channel_upstream_update", "ok", "")
 	if !channelUpstreamModelUpdateTaskRunning.CompareAndSwap(false, true) {
 		return
 	}
@@ -537,6 +536,7 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 	addModelSamples := make([]string, 0)
 	removeModelSamples := make([]string, 0)
 	refreshNeeded := false
+	queryFailed := false
 
 	lastID := 0
 	for {
@@ -551,6 +551,7 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 		}
 		err := query.Find(&channels).Error
 		if err != nil {
+			queryFailed = true
 			common.SysLog(fmt.Sprintf("upstream model update task query failed: %v", err))
 			break
 		}
@@ -610,6 +611,15 @@ func runChannelUpstreamModelUpdateTaskOnce() {
 
 	if refreshNeeded {
 		refreshChannelRuntimeCache()
+	}
+	if queryFailed || failedChannels > 0 {
+		common.MarkJobHeartbeat(
+			"channel_upstream_update",
+			"error",
+			fmt.Sprintf("query_failed=%t failed_channels=%d", queryFailed, failedChannels),
+		)
+	} else {
+		common.MarkJobHeartbeat("channel_upstream_update", "ok", "")
 	}
 
 	if checkedChannels > 0 || common.DebugEnabled {

@@ -63,6 +63,7 @@ type OpsDetailRow struct {
 	ModelName      string  `json:"model_name"`
 	Group          string  `json:"group"`
 	ChannelId      int     `json:"channel_id"`
+	ChannelName    string  `json:"channel_name"`
 	ChannelType    int     `json:"channel_type"`
 	RequestCount   int64   `json:"request_count"`
 	SuccessCount   int64   `json:"success_count"`

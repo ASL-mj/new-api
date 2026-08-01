@@ -73,7 +73,7 @@ const OpsDetailModal = ({
   overview,
   t,
 }) => {
-  const columns = [
+  const baseColumns = [
     {
       title: t('时间'),
       dataIndex: 'bucket_ts',
@@ -84,37 +84,61 @@ const OpsDetailModal = ({
     { title: t('调用分组'), dataIndex: 'group', width: 120 },
     {
       title: t('渠道'),
-      dataIndex: 'channel_id',
-      width: 80,
-      render: (value) => `#${value}`,
+      dataIndex: 'channel_name',
+      width: 150,
+      render: (value, row) => value || `#${row.channel_id}`,
     },
-    { title: t('请求'), dataIndex: 'request_count', width: 75 },
-    { title: t('成功'), dataIndex: 'success_count', width: 75 },
-    {
-      title: 'SLA',
-      dataIndex: 'sla',
-      width: 85,
-      render: (value) => `${Number(value || 0).toFixed(2)}%`,
-    },
-    {
-      title: t('错误率'),
-      dataIndex: 'error_rate',
-      width: 90,
-      render: (value) => `${Number(value || 0).toFixed(2)}%`,
-    },
-    { title: t('上游错误'), dataIndex: 'upstream_errors', width: 95 },
-    {
-      title: t('平均 TTFT'),
-      dataIndex: 'avg_ttft_ms',
-      width: 105,
-      render: (value) => `${value || 0} ms`,
-    },
-    {
-      title: t('平均时长'),
-      dataIndex: 'avg_duration_ms',
-      width: 105,
-      render: (value) => `${value || 0} ms`,
-    },
+  ];
+  const metricColumns = {
+    requests: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      { title: t('成功'), dataIndex: 'success_count', width: 75 },
+    ],
+    sla: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      { title: t('成功'), dataIndex: 'success_count', width: 75 },
+      {
+        title: 'SLA',
+        dataIndex: 'sla',
+        width: 85,
+        render: (value) => `${Number(value || 0).toFixed(2)}%`,
+      },
+    ],
+    errors: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      {
+        title: t('错误率'),
+        dataIndex: 'error_rate',
+        width: 90,
+        render: (value) => `${Number(value || 0).toFixed(2)}%`,
+      },
+    ],
+    upstream: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      { title: t('上游错误'), dataIndex: 'upstream_errors', width: 95 },
+    ],
+    ttft: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      {
+        title: t('平均 TTFT'),
+        dataIndex: 'avg_ttft_ms',
+        width: 105,
+        render: (value) => `${value || 0} ms`,
+      },
+    ],
+    duration: [
+      { title: t('请求'), dataIndex: 'request_count', width: 75 },
+      {
+        title: t('平均时长'),
+        dataIndex: 'avg_duration_ms',
+        width: 105,
+        render: (value) => `${value || 0} ms`,
+      },
+    ],
+  };
+  const columns = [
+    ...baseColumns,
+    ...(metricColumns[detailMetric?.key] || metricColumns.requests),
   ];
 
   return (

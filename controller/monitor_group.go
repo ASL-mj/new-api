@@ -339,11 +339,12 @@ func makeAdminMonitorGroupResponses(groups []*model.MonitorGroup) ([]AdminMonito
 		}
 	}
 	for i, group := range groups {
+		running := isMonitorGroupRunning(group.Id) || group.RunLeaseUntil > common.GetTimestamp()
 		responses[i] = AdminMonitorGroupResponse{
 			MonitorGroup: *group,
 			Targets:      targetsByGroup[group.Id],
 			ChannelTypes: monitorChannelTypeNames(channelsByGroup[group.Id]),
-			Running:      isMonitorGroupRunning(group.Id),
+			Running:      running,
 		}
 		if responses[i].Targets == nil {
 			responses[i].Targets = []MonitorGroupTargetResponse{}

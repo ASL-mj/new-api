@@ -156,6 +156,21 @@ func TestUserMonitorStatusRedactsChannelAndUpstreamDetails(t *testing.T) {
 	assert.NotContains(t, detailRecorder.Body.String(), "upstream secret detail")
 }
 
+func TestCurrentMonitorChecksExcludeStaleProbeResults(t *testing.T) {
+	now := int64(10_000)
+	group := &model.MonitorGroup{IntervalSeconds: 60, TimeoutSeconds: 10}
+	checks := []*model.MonitorCheck{
+		{CheckedAt: now - 69, Status: model.MonitorCheckStatusOperational},
+		{CheckedAt: now - 71, Status: model.MonitorCheckStatusOperational},
+	}
+
+	fresh := currentMonitorChecks(checks, group, now)
+	require.Len(t, fresh, 1)
+	assert.EqualValues(t, now-69, fresh[0].CheckedAt)
+	assert.Equal(t, model.MonitorCheckStatusOperational, summarizeMonitorStatus(fresh))
+	assert.Equal(t, "unknown", summarizeMonitorStatus(currentMonitorChecks(checks, group, now+70)))
+}
+
 func TestCreateMonitorGroupAcceptsOnlyCommonChannelModels(t *testing.T) {
 	prepareMonitorRunnerTables(t)
 	channelA := &model.Channel{Type: 1, Key: "a", Name: "A", Models: "gpt-5.4,gpt-5.4-mini"}
