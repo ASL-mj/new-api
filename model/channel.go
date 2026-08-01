@@ -18,6 +18,13 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	ChannelQuotaLimitModeNone    = "none"
+	ChannelQuotaLimitModeChannel = "channel"
+	ChannelQuotaLimitModeKey     = "key"
+	ChannelQuotaLimitModeBoth    = "both"
+)
+
 type Channel struct {
 	Id                 int     `json:"id"`
 	Type               int     `json:"type" gorm:"default:0"`
@@ -37,6 +44,10 @@ type Channel struct {
 	Models             string  `json:"models"`
 	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
+	QuotaLimitMode     string  `json:"quota_limit_mode" gorm:"type:varchar(16);default:'none';index"`
+	QuotaLimit         int64   `json:"quota_limit" gorm:"bigint;default:0"`
+	QuotaLimitUsed     int64   `json:"quota_limit_used" gorm:"bigint;default:0"`
+	QuotaLimitResetAt  int64   `json:"quota_limit_reset_at" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
@@ -76,6 +87,65 @@ func (c ChannelInfo) Value() (driver.Value, error) {
 func (c *ChannelInfo) Scan(value interface{}) error {
 	bytesValue, _ := value.([]byte)
 	return common.Unmarshal(bytesValue, c)
+}
+
+func NormalizeQuotaLimitMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ChannelQuotaLimitModeChannel:
+		return ChannelQuotaLimitModeChannel
+	case ChannelQuotaLimitModeKey:
+		return ChannelQuotaLimitModeKey
+	case ChannelQuotaLimitModeBoth:
+		return ChannelQuotaLimitModeBoth
+	default:
+		return ChannelQuotaLimitModeNone
+	}
+}
+
+func (channel *Channel) UsesChannelQuota() bool {
+	switch NormalizeQuotaLimitMode(channel.QuotaLimitMode) {
+	case ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth:
+		return true
+	default:
+		return false
+	}
+}
+
+func (channel *Channel) UsesKeyQuota() bool {
+	switch NormalizeQuotaLimitMode(channel.QuotaLimitMode) {
+	case ChannelQuotaLimitModeKey, ChannelQuotaLimitModeBoth:
+		return true
+	default:
+		return false
+	}
+}
+
+func (channel *Channel) IsChannelQuotaExceeded() bool {
+	if !channel.UsesChannelQuota() {
+		return false
+	}
+	if channel.QuotaLimit <= 0 {
+		return false
+	}
+	return channel.QuotaLimitUsed >= channel.QuotaLimit
+}
+
+func (channel *Channel) ResetQuotaLimitUsage(resetAt int64) error {
+	if channel.Id != 0 && DB != nil {
+		err := DB.Model(channel).
+			Select("quota_limit_used", "quota_limit_reset_at").
+			Updates(Channel{
+				QuotaLimitUsed:    0,
+				QuotaLimitResetAt: resetAt,
+			}).Error
+		if err != nil {
+			return err
+		}
+	}
+
+	channel.QuotaLimitUsed = 0
+	channel.QuotaLimitResetAt = resetAt
+	return nil
 }
 
 func (channel *Channel) GetKeys() []string {
