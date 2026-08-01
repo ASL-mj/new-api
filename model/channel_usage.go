@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const ChannelKeyFingerprintSecretOption = "ChannelKeyFingerprintSecret"
@@ -106,77 +107,55 @@ func loadOrCreateChannelKeyFingerprintSecret() (string, error) {
 		return "", err
 	}
 
-	var resolvedSecret string
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		option, err := findChannelKeyFingerprintSecretOption(tx)
-		switch {
-		case err == nil:
-			if strings.TrimSpace(option.Value) != "" {
-				resolvedSecret = option.Value
-				return nil
-			}
-			return fillEmptyChannelKeyFingerprintSecret(tx, &option, generatedSecret, &resolvedSecret)
-		case !errors.Is(err, gorm.ErrRecordNotFound):
-			return err
+	option, err := readChannelKeyFingerprintSecretFresh(DB)
+	switch {
+	case err == nil && strings.TrimSpace(option.Value) != "":
+		cacheChannelKeyFingerprintSecretOption(option.Value)
+		return option.Value, nil
+	case err == nil:
+		if err := fillEmptyChannelKeyFingerprintSecret(DB, generatedSecret); err != nil {
+			return "", err
 		}
-
-		option = Option{
+	case !errors.Is(err, gorm.ErrRecordNotFound):
+		return "", err
+	default:
+		if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&Option{
 			Key:   ChannelKeyFingerprintSecretOption,
 			Value: generatedSecret,
+		}).Error; err != nil {
+			return "", err
 		}
-		if err := tx.Create(&option).Error; err != nil {
-			option, lookupErr := findChannelKeyFingerprintSecretOption(tx)
-			if lookupErr != nil {
-				return err
-			}
-			if strings.TrimSpace(option.Value) == "" {
-				return fillEmptyChannelKeyFingerprintSecret(tx, &option, generatedSecret, &resolvedSecret)
-			}
-			resolvedSecret = option.Value
-			return nil
-		}
+	}
 
-		resolvedSecret = generatedSecret
-		return nil
-	})
+	// Always resolve via a fresh session after conflict-recovery paths so we read the
+	// committed row that won the primary-key race instead of depending on any in-flight snapshot.
+	resolvedOption, err := readChannelKeyFingerprintSecretFresh(DB)
 	if err != nil {
 		return "", err
 	}
-
-	if strings.TrimSpace(resolvedSecret) == "" {
+	if strings.TrimSpace(resolvedOption.Value) == "" {
 		return "", fmt.Errorf("%s option is empty", ChannelKeyFingerprintSecretOption)
 	}
 
-	cacheChannelKeyFingerprintSecretOption(resolvedSecret)
-	return resolvedSecret, nil
+	cacheChannelKeyFingerprintSecretOption(resolvedOption.Value)
+	return resolvedOption.Value, nil
 }
 
-func fillEmptyChannelKeyFingerprintSecret(tx *gorm.DB, option *Option, generatedSecret string, resolvedSecret *string) error {
-	result := tx.Model(&Option{}).
-		Where("key = ? AND value = ?", ChannelKeyFingerprintSecretOption, option.Value).
+func fillEmptyChannelKeyFingerprintSecret(db *gorm.DB, generatedSecret string) error {
+	result := db.Model(&Option{}).
+		Where("key = ? AND value = ?", ChannelKeyFingerprintSecretOption, "").
 		Update("value", generatedSecret)
 	if result.Error != nil {
 		return result.Error
 	}
-	if result.RowsAffected == 1 {
-		*resolvedSecret = generatedSecret
-		return nil
-	}
-
-	reloaded, err := findChannelKeyFingerprintSecretOption(tx)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(reloaded.Value) == "" {
-		return fmt.Errorf("%s option is empty", ChannelKeyFingerprintSecretOption)
-	}
-	*resolvedSecret = reloaded.Value
 	return nil
 }
 
-func findChannelKeyFingerprintSecretOption(db *gorm.DB) (Option, error) {
+func readChannelKeyFingerprintSecretFresh(db *gorm.DB) (Option, error) {
 	var option Option
-	err := db.Where("key = ?", ChannelKeyFingerprintSecretOption).First(&option).Error
+	err := db.Session(&gorm.Session{NewDB: true}).
+		Where("key = ?", ChannelKeyFingerprintSecretOption).
+		First(&option).Error
 	return option, err
 }
 

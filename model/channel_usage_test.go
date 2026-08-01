@@ -67,7 +67,6 @@ func prepareChannelUsageMigrationDB(t *testing.T) {
 	common.UsingSQLite = true
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
-	require.NoError(t, isolatedDB.AutoMigrate(&Option{}))
 
 	t.Cleanup(func() {
 		resetChannelKeyFingerprintSecretCache()
@@ -79,6 +78,12 @@ func prepareChannelUsageMigrationDB(t *testing.T) {
 		_ = sqlDB.Close()
 		modelTestDBMutex.Unlock()
 	})
+}
+
+func prepareChannelUsageSecretDB(t *testing.T) {
+	t.Helper()
+	prepareChannelUsageMigrationDB(t)
+	require.NoError(t, DB.AutoMigrate(&Option{}))
 }
 
 func TestNormalizeQuotaLimitMode(t *testing.T) {
@@ -317,7 +322,7 @@ func TestChannelUsageModelsMigrateAndEnforceUniqueConstraints(t *testing.T) {
 }
 
 func TestFingerprintChannelKeyPersistsSecretAcrossCacheReset(t *testing.T) {
-	prepareChannelUsageMigrationDB(t)
+	prepareChannelUsageSecretDB(t)
 	t.Setenv("CRYPTO_SECRET", "")
 
 	previousSecret := common.CryptoSecret
@@ -346,8 +351,41 @@ func TestFingerprintChannelKeyPersistsSecretAcrossCacheReset(t *testing.T) {
 	assert.EqualValues(t, 1, count)
 }
 
+func TestFingerprintChannelKeyRepairsEmptyOptionAndReadsCommittedValue(t *testing.T) {
+	prepareChannelUsageSecretDB(t)
+	t.Setenv("CRYPTO_SECRET", "")
+
+	previousSecret := common.CryptoSecret
+	common.CryptoSecret = "process-random-empty"
+	t.Cleanup(func() {
+		common.CryptoSecret = previousSecret
+		resetChannelKeyFingerprintSecretCache()
+	})
+
+	require.NoError(t, DB.Create(&Option{
+		Key:   ChannelKeyFingerprintSecretOption,
+		Value: "",
+	}).Error)
+
+	// The implementation must repair the empty row and then re-read through a fresh
+	// session instead of trusting any stale in-process/transaction snapshot.
+	firstFingerprint, err := FingerprintChannelKey("sk-empty-secret-key")
+	require.NoError(t, err)
+
+	var stored Option
+	require.NoError(t, DB.Where("key = ?", ChannelKeyFingerprintSecretOption).First(&stored).Error)
+	require.NotEmpty(t, stored.Value)
+
+	resetChannelKeyFingerprintSecretCache()
+	common.CryptoSecret = "process-random-empty-2"
+
+	secondFingerprint, err := FingerprintChannelKey("sk-empty-secret-key")
+	require.NoError(t, err)
+	assert.Equal(t, firstFingerprint, secondFingerprint)
+}
+
 func TestGetChannelKeyFingerprintSecretConcurrentFirstCreate(t *testing.T) {
-	prepareChannelUsageMigrationDB(t)
+	prepareChannelUsageSecretDB(t)
 	t.Setenv("CRYPTO_SECRET", "")
 
 	resetChannelKeyFingerprintSecretCache()
