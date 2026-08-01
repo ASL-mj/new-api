@@ -3657,6 +3657,8 @@
     "吞吐": "Débit",
     "模型性能概览": "Aperçu des performances du modèle",
     "性能时间范围": "Plage de temps des performances",
+    "最近 24 小时的性能指标": "Indicateurs de performance des dernières 24 heures",
+    "最近 24 小时 {{count}} 个异常时间段": "{{count}} heures avec incident au cours des dernières 24 heures",
     "仅统计真实 Relay 请求": "Seules les requêtes Relay réelles sont comptabilisées",
     "平均 TPS": "TPS moyen",
     "平均总延迟": "Latence totale moyenne",

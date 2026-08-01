@@ -186,3 +186,38 @@ func TestPostWssConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {
 		requireNoRecordedRelayMetric(t, recorded)
 	})
 }
+
+func TestRecordSuccessfulRelayQuotaAlsoRecordsOpsMetrics(t *testing.T) {
+	originalPerformance := recordRelayQuotaSample
+	originalOps := recordRelayOpsSuccess
+	t.Cleanup(func() {
+		recordRelayQuotaSample = originalPerformance
+		recordRelayOpsSuccess = originalOps
+	})
+
+	performanceRecorded := make(chan relayMetricSample, 1)
+	opsRecorded := make(chan relayMetricSample, 1)
+	recordRelayQuotaSample = func(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+		performanceRecorded <- relayMetricSample{info: info, success: success, outputTokens: outputTokens}
+	}
+	recordRelayOpsSuccess = func(info *relaycommon.RelayInfo, outputTokens int64) {
+		opsRecorded <- relayMetricSample{info: info, success: true, outputTokens: outputTokens}
+	}
+
+	info := newQuotaMetricsRelayInfo(&quotaMetricsTestBilling{})
+	recordSuccessfulRelayQuota(info, 21)
+
+	for name, recorded := range map[string]<-chan relayMetricSample{
+		"performance": performanceRecorded,
+		"ops":         opsRecorded,
+	} {
+		select {
+		case sample := <-recorded:
+			require.Same(t, info, sample.info, name)
+			require.True(t, sample.success, name)
+			require.EqualValues(t, 21, sample.outputTokens, name)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s metric", name)
+		}
+	}
+}

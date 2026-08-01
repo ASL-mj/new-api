@@ -49,6 +49,9 @@ const routerMap = {
   deployment: '/console/deployment',
   playground: '/console/playground',
   personal: '/console/personal',
+  monitorStatus: '/console/monitor-status',
+  monitorGroups: '/console/monitor-groups',
+  ops: '/console/ops',
 };
 
 const SiderBar = ({ onNavigate = () => {} }) => {
@@ -105,6 +108,11 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         className:
           localStorage.getItem('enable_task') === 'true' ? '' : 'tableHiddle',
       },
+      {
+        text: t('分组状态'),
+        itemKey: 'monitorStatus',
+        to: '/monitor-status',
+      },
     ];
 
     // 根据配置过滤项目
@@ -151,6 +159,18 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('渠道管理'),
         itemKey: 'channel',
         to: '/channel',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('渠道状态'),
+        itemKey: 'monitorGroups',
+        to: '/monitor-groups',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('运维监控'),
+        itemKey: 'ops',
+        to: '/ops',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {

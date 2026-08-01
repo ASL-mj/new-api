@@ -18,36 +18,75 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useId } from 'react';
-import { Card, Empty, Typography } from '@douyinfe/semi-ui';
+import { Avatar, Card, Empty, Typography } from '@douyinfe/semi-ui';
+import { Activity, AlertTriangle, HeartPulse } from 'lucide-react';
 import { VChart } from '@visactor/react-vchart';
 import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
 import {
+  buildPerformanceChartSeries,
   formatChartTime,
   formatLatency,
   formatPercentage,
+  countPerformanceIncidents,
+  getSuccessRateColor,
+  MODEL_PERFORMANCE_HOURS,
 } from '../../../../../helpers/performance';
 
 const { Text } = Typography;
 
 const CHART_CONFIG = { mode: 'desktop-browser' };
 
-const ModelPerformanceCharts = ({ series = [], hours, t }) => {
+const getAvailabilityAxisMin = (points) => {
+  const values = points
+    .filter((point) => point.has_data)
+    .map((point) => Number(point.success_rate))
+    .filter(Number.isFinite);
+  if (values.length === 0) return 95;
+  const minimum = Math.min(...values);
+  if (minimum >= 95) return 95;
+  if (minimum >= 90) return 90;
+  return Math.max(0, Math.floor((minimum - 5) / 10) * 10);
+};
+
+const SectionHeading = ({ icon: Icon, title, description, accent }) => (
+  <div className='mb-2 flex items-start justify-between gap-3'>
+    <div className='flex min-w-0 items-center gap-2'>
+      <Avatar size='small' color='green' className='shrink-0 shadow-md'>
+        <Icon size={16} />
+      </Avatar>
+      <div className='min-w-0'>
+        <Text strong>{title}</Text>
+        <div className='text-xs text-gray-500'>{description}</div>
+      </div>
+    </div>
+    {accent}
+  </div>
+);
+
+const ModelPerformanceCharts = ({ series = [], groupSeries = [], t }) => {
   const chartId = useId();
 
   useEffect(() => {
     initVChartSemiTheme({ isWatchingThemeSwitch: true });
   }, []);
 
-  const chartData = series.map((point) => ({
+  const chartSeries = buildPerformanceChartSeries(groupSeries);
+  const latencyData = chartSeries.latency.map((point) => ({
     ...point,
-    time: formatChartTime(point.ts, hours),
+    time: formatChartTime(point.ts, MODEL_PERFORMANCE_HOURS),
   }));
-  const chartSummary = t('趋势包含 {{count}} 个时间点', {
-    count: chartData.length,
-  });
+  const availabilityData = chartSeries.availability.map((point) => ({
+    ...point,
+    time: formatChartTime(point.ts, MODEL_PERFORMANCE_HOURS),
+  }));
+  const incidents = countPerformanceIncidents(
+    groupSeries.length > 0
+      ? groupSeries.flatMap((group) => group.series || [])
+      : series,
+  );
   const ttftSpec = {
     type: 'line',
-    data: [{ id: 'ttft', values: chartData }],
+    data: [{ id: `${chartId}-ttft`, values: latencyData }],
     xField: 'time',
     yField: 'avg_ttft_ms',
     axes: [
@@ -60,13 +99,18 @@ const ModelPerformanceCharts = ({ series = [], hours, t }) => {
         },
       },
     ],
-    point: { visible: false },
-    line: { style: { lineWidth: 2 } },
+    smooth: true,
+    point: {
+      visible: true,
+      style: { size: 5, stroke: '#ffffff', lineWidth: 1.5 },
+    },
+    line: { style: { lineWidth: 2 }, connectNulls: false },
     tooltip: {
       mark: {
+        title: { value: (datum) => datum.time },
         content: [
           {
-            key: () => t('平均 TTFT'),
+            key: t('平均 TTFT'),
             value: (datum) => formatLatency(datum.avg_ttft_ms),
           },
         ],
@@ -75,14 +119,16 @@ const ModelPerformanceCharts = ({ series = [], hours, t }) => {
   };
   const availabilitySpec = {
     type: 'line',
-    data: [{ id: 'availability', values: chartData }],
+    data: [{ id: `${chartId}-availability`, values: availabilityData }],
     xField: 'time',
     yField: 'success_rate',
     axes: [
       { orient: 'bottom', label: { visible: true } },
       {
         orient: 'left',
-        min: 0,
+        min: getAvailabilityAxisMin(
+          availabilityData.map((point) => ({ ...point, has_data: true })),
+        ),
         max: 100,
         label: {
           visible: true,
@@ -90,13 +136,24 @@ const ModelPerformanceCharts = ({ series = [], hours, t }) => {
         },
       },
     ],
-    point: { visible: false },
-    line: { style: { lineWidth: 2 } },
+    smooth: true,
+    point: {
+      visible: true,
+      style: {
+        size: 5,
+        stroke: '#ffffff',
+        lineWidth: 1.5,
+        fill: (datum) =>
+          getSuccessRateColor(datum.success_rate),
+      },
+    },
+    line: { style: { lineWidth: 2, stroke: '#10b981' }, connectNulls: false },
     tooltip: {
       mark: {
+        title: { value: (datum) => datum.time },
         content: [
           {
-            key: () => t('请求成功率'),
+            key: t('请求成功率'),
             value: (datum) => formatPercentage(datum.success_rate),
           },
         ],
@@ -104,11 +161,16 @@ const ModelPerformanceCharts = ({ series = [], hours, t }) => {
     },
   };
 
-  const renderChart = (title, spec, label, descriptionId, describePoint) => (
-    <Card title={title} bordered bodyStyle={{ padding: 8 }}>
-      <Text type='tertiary' size='small'>
-        {chartSummary}
-      </Text>
+  const renderChart = (
+    heading,
+    spec,
+    label,
+    descriptionId,
+    chartData,
+    describePoint,
+  ) => (
+    <Card bordered bodyStyle={{ padding: 12 }}>
+      {heading}
       <span id={descriptionId} className='sr-only'>
         {chartData.length > 0
           ? chartData
@@ -136,22 +198,44 @@ const ModelPerformanceCharts = ({ series = [], hours, t }) => {
   );
 
   return (
-    <section
-      className='grid grid-cols-1 md:grid-cols-2 gap-3'
-      aria-label={t('模型性能趋势')}
-    >
+    <section className='grid grid-cols-1 gap-3' aria-label={t('模型性能趋势')}>
       {renderChart(
-        t('TTFT 延迟趋势'),
+        <SectionHeading
+          icon={Activity}
+          title={t('TTFT 延迟趋势')}
+          description={t('平均首 Token 延迟')}
+        />,
         ttftSpec,
-        t('TTFT 延迟趋势，{{summary}}', { summary: chartSummary }),
+        t('TTFT 延迟趋势（最近 24 小时）'),
         `${chartId}-ttft-description`,
+        latencyData,
         (point) => formatLatency(point.avg_ttft_ms),
       )}
       {renderChart(
-        t('可用性趋势'),
+        <SectionHeading
+          icon={HeartPulse}
+          title={t('可用性趋势')}
+          description={
+            incidents > 0
+              ? t('最近 24 小时共有 {{count}} 个异常桶', { count: incidents })
+              : t('最近 24 小时无异常事件')
+          }
+          accent={
+            incidents > 0 ? (
+              <div
+                className='flex shrink-0 items-center gap-1 text-xs font-medium'
+                style={{ color: '#ef4444' }}
+              >
+                <AlertTriangle size={14} />
+                {t('{{count}} 起事件', { count: incidents })}
+              </div>
+            ) : null
+          }
+        />,
         availabilitySpec,
-        t('可用性趋势，{{summary}}', { summary: chartSummary }),
+        t('可用率（最近 24 小时）'),
         `${chartId}-availability-description`,
+        availabilityData,
         (point) => formatPercentage(point.success_rate),
       )}
     </section>

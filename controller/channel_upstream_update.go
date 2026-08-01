@@ -520,6 +520,7 @@ func buildUpstreamModelUpdateTaskNotificationContent(
 }
 
 func runChannelUpstreamModelUpdateTaskOnce() {
+	common.MarkJobHeartbeat("channel_upstream_update", "ok", "")
 	if !channelUpstreamModelUpdateTaskRunning.CompareAndSwap(false, true) {
 		return
 	}

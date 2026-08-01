@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,10 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 }
 
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithOptions(channel, testModel, endpointType, isStream, 0, true)
+}
+
+func testChannelWithOptions(channel *model.Channel, testModel string, endpointType string, isStream bool, timeout time.Duration, recordLog bool) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -141,6 +146,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		URL:    &url.URL{Path: requestPath}, // 使用动态路径
 		Body:   nil,
 		Header: make(http.Header),
+	}
+	if timeout > 0 {
+		requestContext, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(requestContext)
 	}
 
 	cache, err := model.GetUserCache(1)
@@ -234,12 +244,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
 
-	err = attachTestBillingRequestInput(info, request)
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+	if recordLog {
+		err = attachTestBillingRequestInput(info, request)
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+			}
 		}
 	}
 
@@ -280,12 +292,15 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	//logInfo.ApiKey = ""
 	common.SysLog(fmt.Sprintf("testing channel %d with model %s , info %+v ", channel.Id, testModel, info.ToString()))
 
-	priceData, err := helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest)),
+	var priceData types.PriceData
+	if recordLog {
+		priceData, err = helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest)),
+			}
 		}
 	}
 
@@ -477,32 +492,66 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
-	info.SetEstimatePromptTokens(usage.PromptTokens)
-
-	quota, tieredResult := settleTestQuota(info, priceData, usage)
-	tok := time.Now()
-	milliseconds := tok.Sub(tik).Milliseconds()
-	consumedTime := float64(milliseconds) / 1000.0
-	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
-	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
-		ChannelId:        channel.Id,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelName:        info.OriginModelName,
-		TokenName:        "模型测试",
-		Quota:            quota,
-		Content:          "模型测试",
-		UseTimeSeconds:   int(consumedTime),
-		IsStream:         info.IsStream,
-		Group:            info.UsingGroup,
-		Other:            other,
-	})
-	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	if recordLog {
+		info.SetEstimatePromptTokens(usage.PromptTokens)
+		quota, tieredResult := settleTestQuota(info, priceData, usage)
+		tok := time.Now()
+		milliseconds := tok.Sub(tik).Milliseconds()
+		consumedTime := float64(milliseconds) / 1000.0
+		other := buildTestLogOther(c, info, priceData, usage, tieredResult)
+		model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
+			ChannelId:        channel.Id,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			ModelName:        info.OriginModelName,
+			TokenName:        "模型测试",
+			Quota:            quota,
+			Content:          "模型测试",
+			UseTimeSeconds:   int(consumedTime),
+			IsStream:         info.IsStream,
+			Group:            info.UsingGroup,
+			Other:            other,
+		})
+		common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	}
 	return testResult{
 		context:     c,
 		localErr:    nil,
 		newAPIError: nil,
 	}
+}
+
+type channelProbeResult struct {
+	Success   bool
+	LatencyMs int64
+	ErrorCode string
+	Message   string
+}
+
+func probeChannel(channel *model.Channel, modelName string, timeout time.Duration) channelProbeResult {
+	startedAt := time.Now()
+	result := testChannelWithOptions(channel, modelName, "", shouldUseStreamForAutomaticChannelTest(channel), timeout, false)
+	probeResult := channelProbeResult{
+		Success:   result.localErr == nil && result.newAPIError == nil,
+		LatencyMs: time.Since(startedAt).Milliseconds(),
+	}
+	if probeResult.Success {
+		return probeResult
+	}
+	if errors.Is(result.localErr, context.DeadlineExceeded) || errors.Is(result.newAPIError, context.DeadlineExceeded) {
+		probeResult.ErrorCode = "timeout"
+	} else if result.newAPIError != nil {
+		probeResult.ErrorCode = string(result.newAPIError.GetErrorCode())
+	}
+	if probeResult.ErrorCode == "" {
+		probeResult.ErrorCode = "probe_failed"
+	}
+	if result.newAPIError != nil {
+		probeResult.Message = result.newAPIError.MaskSensitiveError()
+	} else if result.localErr != nil {
+		probeResult.Message = common.MaskSensitiveInfo(result.localErr.Error())
+	}
+	return probeResult
 }
 
 func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Request) error {

@@ -312,6 +312,39 @@ func SetApiRouter(router *gin.Engine) {
 			groupRoute.GET("/", controller.GetGroups)
 		}
 
+		monitorGroupRoute := apiRouter.Group("/monitor_group")
+		monitorGroupRoute.Use(middleware.AdminAuth())
+		{
+			monitorGroupRoute.GET("/", controller.GetMonitorGroups)
+			monitorGroupRoute.GET("/channels", controller.GetMonitorGroupChannelOptions)
+			monitorGroupRoute.GET("/:id", controller.GetMonitorGroup)
+			monitorGroupRoute.POST("/", controller.CreateMonitorGroup)
+			monitorGroupRoute.PUT("/", controller.UpdateMonitorGroup)
+			monitorGroupRoute.DELETE("/:id", controller.DeleteMonitorGroup)
+			monitorGroupRoute.POST("/:id/run", controller.RunMonitorGroup)
+			monitorGroupRoute.GET("/:id/history", controller.GetMonitorGroupHistory)
+		}
+
+		monitorStatusRoute := apiRouter.Group("/monitor_status")
+		monitorStatusRoute.Use(middleware.UserAuth())
+		{
+			monitorStatusRoute.GET("/", controller.GetMonitorStatus)
+			monitorStatusRoute.GET("/:id", controller.GetMonitorStatusGroup)
+		}
+
+		opsRoute := apiRouter.Group("/ops")
+		opsRoute.Use(middleware.AdminAuth())
+		{
+			opsRoute.GET("/overview", controller.GetOpsOverview)
+			opsRoute.GET("/trends", controller.GetOpsTrends)
+			opsRoute.GET("/details", controller.GetOpsDetails)
+			opsRoute.GET("/system", controller.GetOpsSystem)
+			opsRoute.GET("/rankings", controller.GetOpsRankings)
+		}
+		systemEventRoute := apiRouter.Group("/system_event_log")
+		systemEventRoute.Use(middleware.AdminAuth())
+		systemEventRoute.GET("/", controller.GetSystemEventLogs)
+
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
 		prefillGroupRoute.Use(middleware.AdminAuth())
 		{

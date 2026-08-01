@@ -18,14 +18,57 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Table, Tag, Typography } from '@douyinfe/semi-ui';
+import { Avatar, Table, Tag, Typography } from '@douyinfe/semi-ui';
+import { Activity } from 'lucide-react';
 import {
+  formatChartTime,
   formatLatency,
   formatPercentage,
   formatTps,
+  getSuccessRateColor,
+  getUptimeBarHeight,
+  normalizeHourlyPerformanceSeries,
 } from '../../../../../helpers/performance';
 
 const { Text } = Typography;
+
+const SuccessRateBars = ({ series, rate, t }) => {
+  const points = normalizeHourlyPerformanceSeries(series || []);
+  return (
+    <div className='flex min-w-[170px] items-center gap-2' title={t('成功率')}>
+      <div className='flex h-5 min-w-0 flex-1 items-end gap-px'>
+        {points.map((point) => {
+          return (
+            <span
+              key={point.ts}
+              className='min-w-0 flex-1 rounded-sm'
+              title={
+                point.has_data
+                  ? `${formatChartTime(point.ts, 24)} · ${formatPercentage(point.success_rate)} · ${point.request_count} ${t('次请求')}`
+                  : `${formatChartTime(point.ts, 24)} · ${t('暂无请求数据')}`
+              }
+              style={{
+                height: getUptimeBarHeight(
+                  point.success_rate,
+                  point.has_data,
+                ),
+                backgroundColor: point.has_data
+                  ? getSuccessRateColor(point.success_rate)
+                  : 'var(--semi-color-fill-1)',
+              }}
+            />
+          );
+        })}
+      </div>
+      <span
+        className='w-14 shrink-0 text-right font-mono text-xs font-semibold tabular-nums'
+        style={{ color: getSuccessRateColor(rate) }}
+      >
+        {formatPercentage(rate)}
+      </span>
+    </div>
+  );
+};
 
 const ModelPerformanceGroupTable = ({ groups, t }) => {
   const columns = [
@@ -60,19 +103,29 @@ const ModelPerformanceGroupTable = ({ groups, t }) => {
     {
       title: t('成功率'),
       dataIndex: 'success_rate',
-      width: 104,
-      render: formatPercentage,
+      width: 210,
+      render: (rate, group) => (
+        <SuccessRateBars series={group.series} rate={rate} t={t} />
+      ),
     },
   ];
 
   return (
     <section
-      aria-labelledby='model-performance-group-title'
+      aria-label={t('分组性能')}
       style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}
     >
-      <Text strong id='model-performance-group-title'>
-        {t('分组性能')}
-      </Text>
+      <div className='flex items-center gap-2'>
+        <Avatar size='small' color='green' className='shadow-md'>
+          <Activity size={16} />
+        </Avatar>
+        <div>
+          <Text strong>{t('分组性能')}</Text>
+          <div className='text-xs text-gray-500'>
+            {t('仅统计真实 Relay 请求')}
+          </div>
+        </div>
+      </div>
       <div
         style={{
           width: '100%',
@@ -91,7 +144,7 @@ const ModelPerformanceGroupTable = ({ groups, t }) => {
           pagination={false}
           size='small'
           bordered={false}
-          style={{ minWidth: 608 }}
+          style={{ minWidth: 714 }}
         />
       </div>
     </section>

@@ -9,6 +9,7 @@ import (
 )
 
 func flushLoop() {
+	wasFailing := false
 	for {
 		time.Sleep(time.Duration(perf_metrics_setting.GetFlushIntervalMinutes()) * time.Minute)
 
@@ -17,15 +18,29 @@ func flushLoop() {
 			continue
 		}
 
-		flushCompletedBuckets()
-		if setting.RetentionDays > 0 {
+		flushSucceeded := flushCompletedBuckets()
+		if flushSucceeded {
+			common.MarkJobHeartbeat("perf_metrics_flush", "ok", "")
+			if wasFailing {
+				recordPerfSystemEvent("info", "模型性能指标刷盘已恢复")
+				wasFailing = false
+			}
+		} else {
+			common.MarkJobHeartbeat("perf_metrics_flush", "error", "metrics flush failed; counters restored")
+			if !wasFailing {
+				recordPerfSystemEvent("error", "模型性能指标刷盘失败，内存计数已保留并将自动重试")
+				wasFailing = true
+			}
+		}
+		if flushSucceeded && setting.RetentionDays > 0 {
 			cleanupExpiredMetrics(setting.RetentionDays)
 		}
 	}
 }
 
-func flushCompletedBuckets() {
+func flushCompletedBuckets() bool {
 	currentBucketTs := alignTimestamp(nowFunc().Unix(), int64(perf_metrics_setting.GetBucketSeconds()))
+	flushSucceeded := true
 	queryFlushMu.Lock()
 	defer queryFlushMu.Unlock()
 
@@ -57,11 +72,13 @@ func flushCompletedBuckets() {
 		if err != nil {
 			restoreDrainedCounters(k, drained)
 			common.SysError("failed to flush perf metrics bucket: " + err.Error())
+			flushSucceeded = false
 			return true
 		}
 
 		return true
 	})
+	return flushSucceeded
 }
 
 func restoreDrainedCounters(key bucketKey, drained counters) {

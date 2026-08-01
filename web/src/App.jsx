@@ -47,6 +47,9 @@ import Playground from './pages/Playground';
 import Subscription from './pages/Subscription';
 import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
+import GroupStatus from './pages/GroupStatus';
+import MonitorGroup from './pages/MonitorGroup';
+import Ops from './pages/Ops';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
 
@@ -154,6 +157,30 @@ function App() {
             <PrivateRoute>
               <Token />
             </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/monitor-status'
+          element={
+            <PrivateRoute>
+              <GroupStatus />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/monitor-groups'
+          element={
+            <AdminRoute>
+              <MonitorGroup />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/ops'
+          element={
+            <AdminRoute>
+              <Ops />
+            </AdminRoute>
           }
         />
         <Route

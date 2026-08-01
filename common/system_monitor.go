@@ -22,9 +22,12 @@ type DiskSpaceInfo struct {
 
 // SystemStatus 系统状态信息
 type SystemStatus struct {
-	CPUUsage    float64
-	MemoryUsage float64
-	DiskUsage   float64
+	CPUUsage    float64 `json:"cpu_usage"`
+	MemoryUsage float64 `json:"memory_usage"`
+	MemoryUsed  uint64  `json:"memory_used"`
+	MemoryTotal uint64  `json:"memory_total"`
+	DiskUsage   float64 `json:"disk_usage"`
+	UpdatedAt   int64   `json:"updated_at"`
 }
 
 var latestSystemStatus atomic.Value
@@ -64,7 +67,10 @@ func updateSystemStatus() {
 	memInfo, err := mem.VirtualMemory()
 	if err == nil {
 		status.MemoryUsage = memInfo.UsedPercent
+		status.MemoryUsed = memInfo.Used
+		status.MemoryTotal = memInfo.Total
 	}
+	status.UpdatedAt = time.Now().Unix()
 
 	// Disk
 	diskInfo := GetDiskSpaceInfo()

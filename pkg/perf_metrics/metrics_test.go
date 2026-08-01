@@ -366,13 +366,104 @@ func TestQueryUsesHourlyRollupForDayAndWeek(t *testing.T) {
 		result, err := Query(QueryParams{Model: "gpt-4o", Hours: hours})
 		require.NoError(t, err)
 		require.Len(t, result.Groups, 1)
-		require.Len(t, result.Groups[0].Series, 2)
+		if hours == 24 {
+			require.Len(t, result.Groups[0].Series, 24)
+			assert.EqualValues(t, now.Unix()-23*hourSeconds, result.Groups[0].Series[0].Ts)
+			assert.EqualValues(t, now.Unix(), result.Groups[0].Series[23].Ts)
+			assert.EqualValues(t, 2, result.Groups[0].Series[21].RequestCount)
+			assert.EqualValues(t, 2, result.Groups[0].Series[22].RequestCount)
+			assert.Zero(t, result.Groups[0].Series[23].RequestCount)
+			continue
+		}
 
+		require.Len(t, result.Groups[0].Series, 2)
 		assert.EqualValues(t, now.Unix()-7200, result.Groups[0].Series[0].Ts)
 		assert.EqualValues(t, now.Unix()-3600, result.Groups[0].Series[1].Ts)
 		assert.EqualValues(t, 2, result.Groups[0].Series[0].RequestCount)
 		assert.EqualValues(t, 2, result.Groups[0].Series[1].RequestCount)
 	}
+}
+
+func TestQueryMaterializesEmptyHourlyPoints(t *testing.T) {
+	now := time.Unix(48*3600+17*60, 0).UTC()
+	preparePerfMetricsTestState(t, now)
+	start := alignTimestamp(now.Unix(), hourSeconds) - 23*hourSeconds
+
+	for _, bucket := range []int64{start + hourSeconds, start + 9*hourSeconds, start + 23*hourSeconds} {
+		insertPerfMetric(t, &model.PerfMetric{
+			ModelName:      "gpt-5.4",
+			Group:          "default",
+			BucketTs:       bucket,
+			RequestCount:   1,
+			SuccessCount:   1,
+			TotalLatencyMs: 1000,
+		})
+	}
+
+	result, err := Query(QueryParams{Model: "gpt-5.4", Hours: 24})
+	require.NoError(t, err)
+	require.Len(t, result.Overall.Series, 24)
+	require.Len(t, result.Groups, 1)
+	require.Len(t, result.Groups[0].Series, 24)
+
+	for i, point := range result.Overall.Series {
+		assert.EqualValues(t, start+int64(i)*hourSeconds, point.Ts)
+	}
+	assert.EqualValues(t, 1, result.Overall.Series[1].RequestCount)
+	assert.EqualValues(t, 1, result.Overall.Series[9].RequestCount)
+	assert.EqualValues(t, 1, result.Overall.Series[23].RequestCount)
+	assert.Zero(t, result.Overall.Series[0].RequestCount)
+	assert.Zero(t, result.Overall.Series[10].RequestCount)
+	assert.Zero(t, result.Overall.Series[22].RequestCount)
+}
+
+func TestQueryWeightsHourlyOverallByRawRequestCounts(t *testing.T) {
+	now := time.Unix(48*3600+17*60, 0).UTC()
+	preparePerfMetricsTestState(t, now)
+	currentHour := alignTimestamp(now.Unix(), hourSeconds)
+
+	insertPerfMetric(t, &model.PerfMetric{
+		ModelName:      "gpt-5.4",
+		Group:          "small",
+		BucketTs:       currentHour,
+		RequestCount:   1,
+		SuccessCount:   1,
+		TotalLatencyMs: 1000,
+	})
+	insertPerfMetric(t, &model.PerfMetric{
+		ModelName:      "gpt-5.4",
+		Group:          "large",
+		BucketTs:       currentHour,
+		RequestCount:   3,
+		SuccessCount:   3,
+		TotalLatencyMs: 6000,
+	})
+
+	result, err := Query(QueryParams{Model: "gpt-5.4", Hours: 24})
+	require.NoError(t, err)
+	assert.EqualValues(t, 4, result.Overall.RequestCount)
+	assert.EqualValues(t, 1750, result.Overall.Series[23].AvgLatencyMs)
+	assert.EqualValues(t, 4, result.Overall.Series[23].RequestCount)
+}
+
+func TestQueryIncludesCurrentHotBucketInLastHourlyPoint(t *testing.T) {
+	now := time.Unix(48*3600+17*60, 0).UTC()
+	preparePerfMetricsTestState(t, now)
+
+	Record(Sample{
+		Model:        "gpt-5.4",
+		Group:        "default",
+		LatencyMs:    1250,
+		Success:      true,
+		OutputTokens: 100,
+		GenerationMs: 2000,
+	})
+
+	result, err := Query(QueryParams{Model: "gpt-5.4", Hours: 24})
+	require.NoError(t, err)
+	require.Len(t, result.Overall.Series, 24)
+	assert.EqualValues(t, 1, result.Overall.Series[23].RequestCount)
+	assert.EqualValues(t, 1250, result.Overall.Series[23].AvgLatencyMs)
 }
 
 func TestOverallUsesRawCountersAndAllowedGroupsExcludesInactive(t *testing.T) {
@@ -454,7 +545,7 @@ func TestFlushCompletedBucketsRetainsCountersOnFailure(t *testing.T) {
 		return assert.AnError
 	}
 
-	flushCompletedBuckets()
+	assert.False(t, flushCompletedBuckets())
 
 	stored, ok := hotBuckets.Load(key)
 	require.True(t, ok)
@@ -468,7 +559,7 @@ func TestFlushCompletedBucketsRetainsCountersOnFailure(t *testing.T) {
 	assert.EqualValues(t, 11, snapshot.generationMs)
 
 	upsertPerfMetric = model.UpsertPerfMetric
-	flushCompletedBuckets()
+	assert.True(t, flushCompletedBuckets())
 
 	_, ok = hotBuckets.Load(key)
 	assert.False(t, ok)

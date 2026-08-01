@@ -18,25 +18,20 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
+import { Activity, Gauge, Timer } from 'lucide-react';
 import {
   formatCompactLatency,
   formatCompactThroughput,
-  getSuccessRateBarClass,
+  getSuccessRateColor,
+  normalizeRecentSuccessRates,
 } from '../../../../../helpers/performance';
 
 const ModelPerformanceBadge = ({ perf, t }) => {
-  if (!perf) return null;
-
-  const successRate = Number(perf.success_rate);
-  const recentRates = (perf.recent_success_rates || []).filter((rate) =>
-    Number.isFinite(rate),
+  const metrics = perf || {};
+  const successRate = Number(metrics.success_rate);
+  const statusBars = normalizeRecentSuccessRates(
+    metrics.recent_success_rates || [],
   );
-  const statusRates =
-    recentRates.length > 0 ? recentRates.slice(-3) : [successRate];
-  const statusBars = [
-    ...Array(Math.max(0, 3 - statusRates.length)).fill(null),
-    ...statusRates,
-  ].slice(-3);
   const statusTitle = Number.isFinite(successRate)
     ? `${successRate.toFixed(1)}%`
     : '-';
@@ -44,28 +39,44 @@ const ModelPerformanceBadge = ({ perf, t }) => {
   return (
     <div className='hidden w-[132px] shrink-0 grid-cols-[38px_48px_30px] gap-x-2 text-right tabular-nums min-[460px]:grid'>
       <div title={t('平均总延迟')}>
-        <div className='text-[10px] leading-4 text-gray-400'>{t('延迟')}</div>
+        <div className='flex items-center justify-end gap-0.5 text-[10px] leading-4 text-gray-400'>
+          <Timer size={10} />
+          {t('延迟')}
+        </div>
         <div className='whitespace-nowrap font-mono text-xs leading-4 text-gray-500'>
-          {formatCompactLatency(perf.avg_latency_ms)}
+          {formatCompactLatency(metrics.avg_latency_ms)}
         </div>
       </div>
       <div title={t('吞吐')}>
-        <div className='truncate text-[10px] leading-4 text-gray-400'>
+        <div className='flex items-center justify-end gap-0.5 truncate text-[10px] leading-4 text-gray-400'>
+          <Gauge size={10} />
           {t('吞吐')}
         </div>
         <div className='whitespace-nowrap font-mono text-xs leading-4 text-gray-500'>
-          {formatCompactThroughput(perf.avg_tps)}
+          {formatCompactThroughput(metrics.avg_tps)}
         </div>
       </div>
-      <div title={`${t('状态')}: ${statusTitle}`}>
-        <div className='truncate text-[10px] leading-4 text-gray-400'>
+      <div
+        title={
+          perf ? `${t('状态')}: ${statusTitle}` : t('暂无性能数据')
+        }
+      >
+        <div className='flex items-center justify-end gap-0.5 truncate text-[10px] leading-4 text-gray-400'>
+          <Activity size={10} />
           {t('状态')}
         </div>
         <div className='flex h-4 items-center justify-end gap-0.5'>
           {statusBars.map((rate, index) => (
             <span
               key={`${index}-${rate ?? 'empty'}`}
-              className={`w-1 rounded-full ${index === 0 ? 'h-2' : index === 1 ? 'h-2.5' : 'h-3'} ${rate == null ? 'bg-gray-200' : getSuccessRateBarClass(rate)}`}
+              className='w-1 rounded-full'
+              style={{
+                height: `${8 + index * 2}px`,
+                backgroundColor:
+                  rate == null
+                    ? 'var(--semi-color-fill-1)'
+                    : getSuccessRateColor(rate),
+              }}
             />
           ))}
         </div>

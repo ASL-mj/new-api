@@ -49,6 +49,7 @@ func runSubscriptionQuotaResetOnce() {
 		return
 	}
 	defer subscriptionResetRunning.Store(false)
+	common.MarkJobHeartbeat("subscription_quota_reset", "ok", "")
 
 	ctx := context.Background()
 	totalReset := 0

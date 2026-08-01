@@ -127,9 +127,7 @@ func Query(params QueryParams) (QueryResult, error) {
 	defer queryFlushMu.RUnlock()
 
 	nowTs := nowFunc().Unix()
-	sourceBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
-	startBucketTs := alignTimestamp(nowTs-int64(params.Hours)*hourSeconds, sourceBucketSeconds)
-	endBucketTs := alignTimestamp(nowTs, sourceBucketSeconds)
+	startBucketTs, endBucketTs, seriesSlots := performanceWindow(params.Hours, nowTs)
 
 	rows, err := getPerfMetricsByRange(params.Model, params.Group, startBucketTs, endBucketTs)
 	if err != nil {
@@ -180,7 +178,7 @@ func Query(params QueryParams) (QueryResult, error) {
 
 	// Redis only keeps a best-effort active-bucket mirror; single-instance query
 	// intentionally merges DB plus local hotBuckets only to avoid double counting.
-	return buildQueryResult(params, raw), nil
+	return buildQueryResult(params, raw, seriesSlots), nil
 }
 
 func QuerySummaryAll(hours int, allowedGroups []string) (SummaryAllResult, error) {
@@ -193,9 +191,7 @@ func QuerySummaryAll(hours int, allowedGroups []string) (SummaryAllResult, error
 	defer queryFlushMu.RUnlock()
 
 	nowTs := nowFunc().Unix()
-	sourceBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
-	startBucketTs := alignTimestamp(nowTs-int64(hours)*hourSeconds, sourceBucketSeconds)
-	endBucketTs := alignTimestamp(nowTs, sourceBucketSeconds)
+	startBucketTs, endBucketTs, _ := performanceWindow(hours, nowTs)
 	allowed := allowedGroupSet(allowedGroups)
 
 	rows, err := getPerfMetricSummaryBucketsByRange(startBucketTs, endBucketTs, allowedGroups)
@@ -239,18 +235,19 @@ func normalizeHours(hours int) int {
 
 func emptyQueryResult(params QueryParams) QueryResult {
 	params.Hours = normalizeHours(params.Hours)
+	_, _, seriesSlots := performanceWindow(params.Hours, nowFunc().Unix())
 	return QueryResult{
 		ModelName:    params.Model,
 		Hours:        params.Hours,
 		SeriesSchema: seriesSchema,
 		Overall: AggregateResult{
-			Series: []BucketPoint{},
+			Series: buildSeries(map[int64]counters{}, seriesSlots),
 		},
 		Groups: []GroupResult{},
 	}
 }
 
-func buildQueryResult(params QueryParams, raw map[bucketKey]counters) QueryResult {
+func buildQueryResult(params QueryParams, raw map[bucketKey]counters, seriesSlots []int64) QueryResult {
 	rollupSeconds := rollupSecondsForHours(params.Hours)
 	groupSeriesCounters := map[string]map[int64]counters{}
 	groupTotals := map[string]counters{}
@@ -262,6 +259,9 @@ func buildQueryResult(params QueryParams, raw map[bucketKey]counters) QueryResul
 			continue
 		}
 		rollupTs := alignTimestamp(key.bucketTs, rollupSeconds)
+		if len(seriesSlots) > 0 && !timestampInSlots(rollupTs, seriesSlots) {
+			continue
+		}
 		if _, ok := groupSeriesCounters[key.group]; !ok {
 			groupSeriesCounters[key.group] = map[int64]counters{}
 		}
@@ -285,7 +285,7 @@ func buildQueryResult(params QueryParams, raw map[bucketKey]counters) QueryResul
 	for _, group := range groupNames {
 		groups = append(groups, GroupResult{
 			Group:           group,
-			AggregateResult: buildAggregateResult(groupTotals[group], groupSeriesCounters[group]),
+			AggregateResult: buildAggregateResult(groupTotals[group], groupSeriesCounters[group], seriesSlots),
 		})
 	}
 
@@ -293,33 +293,36 @@ func buildQueryResult(params QueryParams, raw map[bucketKey]counters) QueryResul
 		ModelName:    params.Model,
 		Hours:        params.Hours,
 		SeriesSchema: seriesSchema,
-		Overall:      buildAggregateResult(overallTotal, overallSeriesCounters),
+		Overall:      buildAggregateResult(overallTotal, overallSeriesCounters, seriesSlots),
 		Groups:       groups,
 	}
 }
 
-func buildAggregateResult(total counters, seriesCounters map[int64]counters) AggregateResult {
+func buildAggregateResult(total counters, seriesCounters map[int64]counters, seriesSlots []int64) AggregateResult {
 	return AggregateResult{
 		RequestCount: total.requestCount,
 		AvgTtftMs:    avg(total.ttftSumMs, total.ttftCount),
 		AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
 		SuccessRate:  round2(successRate(total)),
 		AvgTps:       round2(avgTps(total)),
-		Series:       buildSeries(seriesCounters),
+		Series:       buildSeries(seriesCounters, seriesSlots),
 	}
 }
 
-func buildSeries(seriesCounters map[int64]counters) []BucketPoint {
-	if len(seriesCounters) == 0 {
-		return []BucketPoint{}
+func buildSeries(seriesCounters map[int64]counters, seriesSlots []int64) []BucketPoint {
+	timestamps := seriesSlots
+	if len(timestamps) == 0 {
+		if len(seriesCounters) == 0 {
+			return []BucketPoint{}
+		}
+		timestamps = make([]int64, 0, len(seriesCounters))
+		for ts := range seriesCounters {
+			timestamps = append(timestamps, ts)
+		}
+		sort.Slice(timestamps, func(i, j int) bool {
+			return timestamps[i] < timestamps[j]
+		})
 	}
-	timestamps := make([]int64, 0, len(seriesCounters))
-	for ts := range seriesCounters {
-		timestamps = append(timestamps, ts)
-	}
-	sort.Slice(timestamps, func(i, j int) bool {
-		return timestamps[i] < timestamps[j]
-	})
 
 	series := make([]BucketPoint, 0, len(timestamps))
 	for _, ts := range timestamps {
@@ -334,6 +337,32 @@ func buildSeries(seriesCounters map[int64]counters) []BucketPoint {
 		})
 	}
 	return series
+}
+
+func performanceWindow(hours int, nowTs int64) (startTs int64, endTs int64, seriesSlots []int64) {
+	hours = normalizeHours(hours)
+	sourceBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
+	endTs = alignTimestamp(nowTs, sourceBucketSeconds)
+	if hours != 24 {
+		startTs = alignTimestamp(nowTs-int64(hours)*hourSeconds, sourceBucketSeconds)
+		return startTs, endTs, nil
+	}
+
+	endHour := alignTimestamp(nowTs, hourSeconds)
+	startHour := endHour - 23*hourSeconds
+	startTs = startHour
+	seriesSlots = make([]int64, 0, 24)
+	for ts := startHour; ts <= endHour; ts += hourSeconds {
+		seriesSlots = append(seriesSlots, ts)
+	}
+	return startTs, endTs, seriesSlots
+}
+
+func timestampInSlots(timestamp int64, slots []int64) bool {
+	if len(slots) == 0 {
+		return true
+	}
+	return timestamp >= slots[0] && timestamp <= slots[len(slots)-1]
 }
 
 func rollupSecondsForHours(hours int) int64 {

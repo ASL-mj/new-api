@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -42,6 +43,7 @@ type QuotaInfo struct {
 }
 
 var recordRelayQuotaSample = perfmetrics.RecordRelaySample
+var recordRelayOpsSuccess = opsmetrics.RecordRelaySuccess
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	defaultRatio, exists := ratio_setting.GetDefaultModelRatioMap()[modelName]
@@ -390,6 +392,7 @@ func recordSuccessfulRelayQuota(relayInfo *relaycommon.RelayInfo, outputTokens i
 	}
 	gopool.Go(func() {
 		recordRelayQuotaSample(relayInfo, true, outputTokens)
+		recordRelayOpsSuccess(relayInfo, outputTokens)
 	})
 }
 

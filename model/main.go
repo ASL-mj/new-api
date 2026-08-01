@@ -254,6 +254,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateMonitorGroupIntervalSeconds(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -269,6 +272,12 @@ func migrateDB() error {
 		&QuotaData{},
 		&Task{},
 		&PerfMetric{},
+		&MonitorGroup{},
+		&MonitorGroupTarget{},
+		&MonitorCheck{},
+		&OpsMetricBucket{},
+		&OpsMetricHistogram{},
+		&SystemEventLog{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -297,6 +306,25 @@ func migrateDB() error {
 	return nil
 }
 
+func migrateMonitorGroupIntervalSeconds() error {
+	migrator := DB.Migrator()
+	if !migrator.HasTable(&MonitorGroup{}) || migrator.HasColumn(&MonitorGroup{}, "interval_seconds") {
+		return nil
+	}
+	if err := migrator.AddColumn(&MonitorGroup{}, "IntervalSeconds"); err != nil {
+		return err
+	}
+	if !migrator.HasColumn(&MonitorGroup{}, "interval_minutes") {
+		return nil
+	}
+	return DB.Exec(`UPDATE monitor_groups
+SET interval_seconds = CASE
+  WHEN interval_minutes * 60 < 15 THEN 15
+  WHEN interval_minutes * 60 > 3600 THEN 3600
+  ELSE interval_minutes * 60
+END`).Error
+}
+
 func migrateDBFast() error {
 
 	var wg sync.WaitGroup
@@ -318,6 +346,12 @@ func migrateDBFast() error {
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&MonitorGroup{}, "MonitorGroup"},
+		{&MonitorGroupTarget{}, "MonitorGroupTarget"},
+		{&MonitorCheck{}, "MonitorCheck"},
+		{&OpsMetricBucket{}, "OpsMetricBucket"},
+		{&OpsMetricHistogram{}, "OpsMetricHistogram"},
+		{&SystemEventLog{}, "SystemEventLog"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},

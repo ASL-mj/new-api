@@ -3802,6 +3802,8 @@
     "吞吐": "Throughput",
     "模型性能概览": "Model performance overview",
     "性能时间范围": "Performance time range",
+    "最近 24 小时的性能指标": "Performance metrics for the last 24 hours",
+    "最近 24 小时 {{count}} 个异常时间段": "{{count}} incident hours in the last 24 hours",
     "仅统计真实 Relay 请求": "Only real Relay requests are included",
     "平均 TPS": "Average TPS",
     "平均总延迟": "Average total latency",

@@ -17,14 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
   Banner,
   Avatar,
   Button,
   Empty,
-  Radio,
-  RadioGroup,
   Skeleton,
   Typography,
 } from '@douyinfe/semi-ui';
@@ -37,23 +35,12 @@ import ModelPerformanceCharts from './ModelPerformanceCharts';
 
 const { Text } = Typography;
 
-const TIME_RANGES = [
-  { value: 1, label: '1h' },
-  { value: 24, label: '24h' },
-  { value: 168, label: '7d' },
-];
-
 const ModelPerformancePanel = ({ modelName, t }) => {
-  const [hours, setHours] = useState(24);
   const { status, data, error, retry } = useModelPerformance({
     modelName,
-    hours,
+    hours: 24,
     enabled: Boolean(modelName),
   });
-
-  useEffect(() => {
-    setHours(24);
-  }, [modelName]);
 
   const overall = data?.overall;
   const hasData = Number(overall?.request_count) > 0;
@@ -69,23 +56,10 @@ const ModelPerformancePanel = ({ modelName, t }) => {
           <div>
             <Text className='text-lg font-medium'>{t('模型性能')}</Text>
             <div className='text-xs text-gray-600 mt-1'>
-              {t('仅统计真实 Relay 请求')}
+              {t('最近 24 小时的性能指标')} · {t('仅统计真实 Relay 请求')}
             </div>
           </div>
         </div>
-        <RadioGroup
-          type='button'
-          size='small'
-          value={hours}
-          aria-label={t('性能时间范围')}
-          onChange={(event) => setHours(Number(event.target.value))}
-        >
-          {TIME_RANGES.map((range) => (
-            <Radio key={range.value} value={range.value}>
-              {range.label}
-            </Radio>
-          ))}
-        </RadioGroup>
       </div>
 
       {status === 'loading' && !data && (
@@ -96,9 +70,9 @@ const ModelPerformancePanel = ({ modelName, t }) => {
               gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
             }}
           >
-            {TIME_RANGES.map((range) => (
+            {Array.from({ length: 3 }, (_, index) => (
               <Skeleton
-                key={range.value}
+                key={index}
                 active
                 placeholder={<Skeleton.Paragraph rows={2} />}
               />
@@ -195,7 +169,7 @@ const ModelPerformancePanel = ({ modelName, t }) => {
           <ModelPerformanceGroupTable groups={data.groups || []} t={t} />
           <ModelPerformanceCharts
             series={overall.series || []}
-            hours={hours}
+            groupSeries={data.groups || []}
             t={t}
           />
         </>

@@ -19,10 +19,12 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	_ "github.com/QuantumNous/new-api/setting/monitoring_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -41,6 +43,12 @@ var buildFS embed.FS
 //go:embed web/dist/index.html
 var indexPage []byte
 
+var startMonitorGroupRunner = controller.StartMonitorGroupRunner
+
+func startMonitorGroupWorkers() {
+	startMonitorGroupRunner()
+}
+
 func main() {
 	startTime := time.Now()
 
@@ -49,7 +57,11 @@ func main() {
 		common.FatalLog("failed to initialize resources: " + err.Error())
 		return
 	}
+	service.StartSystemEventWriter()
+	perfmetrics.SetSystemEventRecorder(service.RecordSystemEvent)
+	opsmetrics.SetSystemEventRecorder(service.RecordSystemEvent)
 	perfmetrics.Init()
+	opsmetrics.Init()
 
 	common.SysLog("New API " + common.Version + " started")
 	if os.Getenv("GIN_MODE") != "debug" {
@@ -107,6 +119,7 @@ func main() {
 	}
 
 	go controller.AutomaticallyTestChannels()
+	startMonitorGroupWorkers()
 
 	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
 	service.StartCodexCredentialAutoRefreshTask()

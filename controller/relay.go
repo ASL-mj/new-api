@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -33,6 +34,10 @@ import (
 )
 
 var recordRelayPerformanceSample = perfmetrics.RecordRelaySample
+var recordRelayOpsFailure = opsmetrics.RecordRelayFailure
+var recordRelaySystemEvent = service.RecordSystemEvent
+var recordTaskOpsSuccess = opsmetrics.RecordRelaySuccess
+var recordTaskOpsFailure = opsmetrics.RecordRelayFailure
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	var err *types.NewAPIError
@@ -165,6 +170,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	} else {
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
+			recordPreConsumeRelayFailure(relayInfo, newAPIError)
 			return
 		}
 	}
@@ -237,7 +243,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 	if newAPIError != nil {
-		recordFinalRelayFailure(relayInfo)
+		recordFinalRelayFailure(relayInfo, newAPIError)
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
@@ -247,13 +253,78 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 }
 
-func recordFinalRelayFailure(relayInfo *relaycommon.RelayInfo) {
+func recordPreConsumeRelayFailure(relayInfo *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
+	if relayInfo == nil || relayErr == nil {
+		return
+	}
+	gopool.Go(func() {
+		recordRelayOpsFailure(relayInfo, relayErr)
+	})
+}
+
+func recordFinalRelayFailure(relayInfo *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
 	if relayInfo == nil {
 		return
 	}
 	gopool.Go(func() {
 		recordRelayPerformanceSample(relayInfo, false, 0)
+		recordRelayOpsFailure(relayInfo, relayErr)
+		recordFinalRelaySystemEvent(relayInfo, relayErr)
 	})
+}
+
+func recordFinalRelaySystemEvent(relayInfo *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
+	if relayInfo == nil || relayErr == nil {
+		return
+	}
+	classification := opsmetrics.ClassifyError(opsmetrics.Sample{
+		StatusCode: relayErr.StatusCode, ErrorCode: string(relayErr.GetErrorCode()),
+		LocalError: relayErr.GetErrorType() == types.ErrorTypeNewAPIError,
+	})
+	if classification != opsmetrics.ErrorClassUpstream {
+		return
+	}
+
+	channelId := 0
+	if relayInfo.ChannelMeta != nil {
+		channelId = relayInfo.ChannelId
+	}
+	recordRelaySystemEvent(model.SystemEventLog{
+		CreatedAt: common.GetTimestamp(), Level: "error", Component: "relay",
+		Message:   fmt.Sprintf("上游请求最终失败（错误码：%s）", relayErr.GetErrorCode()),
+		RequestId: relayInfo.RequestId, ChannelId: channelId, ModelName: relayInfo.OriginModelName,
+		Group: relayInfo.UsingGroup, StatusCode: relayErr.StatusCode,
+		LatencyMs: time.Since(relayInfo.StartTime).Milliseconds(),
+	})
+}
+
+func recordTaskOpsResult(relayInfo *relaycommon.RelayInfo, taskErr *dto.TaskError) {
+	if relayInfo == nil {
+		return
+	}
+	if taskErr == nil {
+		recordTaskOpsSuccess(relayInfo, 0)
+		return
+	}
+
+	relayErr := taskErrorAsNewAPIError(taskErr)
+	recordTaskOpsFailure(relayInfo, relayErr)
+	recordFinalRelaySystemEvent(relayInfo, relayErr)
+}
+
+func taskErrorAsNewAPIError(taskErr *dto.TaskError) *types.NewAPIError {
+	if taskErr == nil {
+		return nil
+	}
+	cause := taskErr.Error
+	if cause == nil {
+		cause = errors.New(taskErr.Code)
+	}
+	errorCode := types.ErrorCode(taskErr.Code)
+	if taskErr.LocalError {
+		return types.NewErrorWithStatusCode(cause, errorCode, taskErr.StatusCode)
+	}
+	return types.NewOpenAIError(cause, errorCode, taskErr.StatusCode)
 }
 
 var upgrader = websocket.Upgrader{
@@ -512,6 +583,11 @@ func RelayTask(c *gin.Context) {
 	defer func() {
 		if taskErr != nil && relayInfo.Billing != nil {
 			relayInfo.Billing.Refund(c)
+		}
+		if taskErr != nil || result != nil {
+			gopool.Go(func() {
+				recordTaskOpsResult(relayInfo, taskErr)
+			})
 		}
 	}()
 

@@ -57,6 +57,7 @@ func runCodexCredentialAutoRefreshOnce() {
 		return
 	}
 	defer codexCredentialRefreshRunning.Store(false)
+	common.MarkJobHeartbeat("codex_credential_refresh", "ok", "")
 
 	ctx := context.Background()
 	now := time.Now()
