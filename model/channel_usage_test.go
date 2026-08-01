@@ -877,6 +877,176 @@ func TestEnsureChannelKeyUsageRecordsReconcilesByFingerprintWithoutResettingExis
 	assert.Equal(t, common.ChannelStatusAutoDisabled, orphanRecord.Status)
 }
 
+func TestEnsureChannelKeyUsageRecordsRemapsMultiKeyStatusByFingerprintAfterReorder(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	channel := &Channel{
+		Name:           "key-usage-remap-reorder",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusAutoDisabled,
+			},
+			MultiKeyDisabledReason: map[int]string{
+				0: "alpha disabled",
+			},
+			MultiKeyDisabledTime: map[int]int64{
+				0: 12345,
+			},
+		},
+	}
+	require.NoError(t, channel.Insert())
+	require.NoError(t, channel.AddAbilities(nil))
+
+	_, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+
+	channel.Key = "sk-beta\nsk-alpha"
+	require.NoError(t, channel.Update())
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.Len(t, currentUsages, 2)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	require.Equal(t, 2, reloaded.ChannelInfo.MultiKeySize)
+	require.NotNil(t, reloaded.ChannelInfo.MultiKeyStatusList)
+	assert.NotContains(t, reloaded.ChannelInfo.MultiKeyStatusList, 0)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.ChannelInfo.MultiKeyStatusList[1])
+	assert.Equal(t, "alpha disabled", reloaded.ChannelInfo.MultiKeyDisabledReason[1])
+	assert.EqualValues(t, 12345, reloaded.ChannelInfo.MultiKeyDisabledTime[1])
+
+	alphaFingerprint, err := FingerprintChannelKey("sk-alpha")
+	require.NoError(t, err)
+	betaFingerprint, err := FingerprintChannelKey("sk-beta")
+	require.NoError(t, err)
+
+	var usages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Order("key_index asc").Find(&usages).Error)
+	require.Len(t, usages, 2)
+	usageByFingerprint := make(map[string]ChannelKeyUsage, len(usages))
+	for _, usage := range usages {
+		usageByFingerprint[usage.KeyFingerprint] = usage
+	}
+	assert.Equal(t, 1, usageByFingerprint[alphaFingerprint].KeyIndex)
+	assert.Equal(t, 0, usageByFingerprint[betaFingerprint].KeyIndex)
+
+	InitChannelCache()
+	cachedChannel, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, reloaded.ChannelInfo.MultiKeyStatusList, cachedChannel.ChannelInfo.MultiKeyStatusList)
+	assert.Equal(t, reloaded.ChannelInfo.MultiKeyDisabledReason, cachedChannel.ChannelInfo.MultiKeyDisabledReason)
+	assert.Equal(t, reloaded.ChannelInfo.MultiKeyDisabledTime, cachedChannel.ChannelInfo.MultiKeyDisabledTime)
+
+	selectedKey, selectedIndex, apiErr := cachedChannel.GetNextEnabledKey()
+	require.Nil(t, apiErr)
+	assert.Equal(t, "sk-beta", selectedKey)
+	assert.Equal(t, 0, selectedIndex)
+}
+
+func TestEnsureChannelKeyUsageRecordsDropsDeletedKeyFromStatusMapButKeepsHistory(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	channel := &Channel{
+		Name:           "key-usage-remap-delete",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusAutoDisabled,
+			},
+			MultiKeyDisabledReason: map[int]string{
+				0: "alpha disabled",
+			},
+			MultiKeyDisabledTime: map[int]int64{
+				0: 67890,
+			},
+		},
+	}
+	require.NoError(t, channel.Insert())
+
+	_, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+
+	alphaFingerprint, err := FingerprintChannelKey("sk-alpha")
+	require.NoError(t, err)
+	betaFingerprint, err := FingerprintChannelKey("sk-beta")
+	require.NoError(t, err)
+
+	channel.Key = "sk-beta"
+	require.NoError(t, channel.Update())
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.Len(t, currentUsages, 1)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, 1, reloaded.ChannelInfo.MultiKeySize)
+	assert.Nil(t, reloaded.ChannelInfo.MultiKeyStatusList)
+	assert.Nil(t, reloaded.ChannelInfo.MultiKeyDisabledReason)
+	assert.Nil(t, reloaded.ChannelInfo.MultiKeyDisabledTime)
+
+	var usages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&usages).Error)
+	require.Len(t, usages, 2)
+	usageByFingerprint := make(map[string]ChannelKeyUsage, len(usages))
+	for _, usage := range usages {
+		usageByFingerprint[usage.KeyFingerprint] = usage
+	}
+	assert.Equal(t, 0, usageByFingerprint[betaFingerprint].KeyIndex)
+	assert.Equal(t, common.ChannelStatusEnabled, usageByFingerprint[betaFingerprint].Status)
+	assert.Equal(t, common.ChannelStatusEnabled, currentUsages[0].Status)
+	_, alphaUsageExists := usageByFingerprint[alphaFingerprint]
+	assert.True(t, alphaUsageExists)
+
+	InitChannelCache()
+	cachedChannel, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Nil(t, cachedChannel.ChannelInfo.MultiKeyStatusList)
+	assert.Nil(t, cachedChannel.ChannelInfo.MultiKeyDisabledReason)
+	assert.Nil(t, cachedChannel.ChannelInfo.MultiKeyDisabledTime)
+
+	selectedKey, selectedIndex, apiErr := cachedChannel.GetNextEnabledKey()
+	require.Nil(t, apiErr)
+	assert.Equal(t, "sk-beta", selectedKey)
+	assert.Equal(t, 0, selectedIndex)
+}
+
 func TestApplyChannelKeyUsageOnlyAccumulatesForKeyModes(t *testing.T) {
 	prepareChannelUsageTable(t)
 	configureChannelUsageSecret(t)

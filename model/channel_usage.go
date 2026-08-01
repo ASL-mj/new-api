@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -189,7 +190,123 @@ func buildChannelKeyUsageAutoDisableCondition(channelID int, fingerprint string)
 	}
 }
 
-func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, error) {
+type channelKeyMeta struct {
+	Fingerprint string
+	Index       int
+	Mask        string
+}
+
+type multiKeyFingerprintState struct {
+	Status int
+	Reason string
+	Time   int64
+}
+
+func buildChannelKeyMetas(keys []string) ([]channelKeyMeta, error) {
+	metas := make([]channelKeyMeta, 0, len(keys))
+	for idx, key := range keys {
+		fingerprint, err := FingerprintChannelKey(key)
+		if err != nil {
+			return nil, err
+		}
+		metas = append(metas, channelKeyMeta{
+			Fingerprint: fingerprint,
+			Index:       idx,
+			Mask:        MaskChannelKey(key),
+		})
+	}
+	return metas, nil
+}
+
+func buildChannelKeyFingerprintsByIndexFromRawKey(rawKey string) (map[int]string, error) {
+	keys := (&Channel{Key: rawKey}).GetKeys()
+	metas, err := buildChannelKeyMetas(keys)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[int]string, len(metas))
+	for _, meta := range metas {
+		result[meta.Index] = meta.Fingerprint
+	}
+	return result, nil
+}
+
+func normalizeChannelInfoStatusMaps(info *ChannelInfo) {
+	if info == nil {
+		return
+	}
+	if len(info.MultiKeyStatusList) == 0 {
+		info.MultiKeyStatusList = nil
+	}
+	if len(info.MultiKeyDisabledReason) == 0 {
+		info.MultiKeyDisabledReason = nil
+	}
+	if len(info.MultiKeyDisabledTime) == 0 {
+		info.MultiKeyDisabledTime = nil
+	}
+}
+
+func remapChannelInfoByFingerprint(info *ChannelInfo, currentKeys []channelKeyMeta, previousFingerprintsByIndex map[int]string) bool {
+	if info == nil {
+		return false
+	}
+
+	normalizeChannelInfoStatusMaps(info)
+
+	previousStates := make(map[string]multiKeyFingerprintState, len(info.MultiKeyStatusList))
+	for index, status := range info.MultiKeyStatusList {
+		fingerprint, ok := previousFingerprintsByIndex[index]
+		if !ok || fingerprint == "" {
+			continue
+		}
+		previousStates[fingerprint] = multiKeyFingerprintState{
+			Status: status,
+			Reason: info.MultiKeyDisabledReason[index],
+			Time:   info.MultiKeyDisabledTime[index],
+		}
+	}
+
+	remappedStatus := make(map[int]int)
+	remappedReason := make(map[int]string)
+	remappedTime := make(map[int]int64)
+	for _, currentKey := range currentKeys {
+		state, ok := previousStates[currentKey.Fingerprint]
+		if !ok || state.Status == 0 || state.Status == common.ChannelStatusEnabled {
+			continue
+		}
+		remappedStatus[currentKey.Index] = state.Status
+		if state.Reason != "" {
+			remappedReason[currentKey.Index] = state.Reason
+		}
+		if state.Time != 0 {
+			remappedTime[currentKey.Index] = state.Time
+		}
+	}
+
+	if len(remappedStatus) == 0 {
+		remappedStatus = nil
+	}
+	if len(remappedReason) == 0 {
+		remappedReason = nil
+	}
+	if len(remappedTime) == 0 {
+		remappedTime = nil
+	}
+
+	changed := info.MultiKeySize != len(currentKeys) ||
+		!reflect.DeepEqual(info.MultiKeyStatusList, remappedStatus) ||
+		!reflect.DeepEqual(info.MultiKeyDisabledReason, remappedReason) ||
+		!reflect.DeepEqual(info.MultiKeyDisabledTime, remappedTime)
+
+	info.MultiKeySize = len(currentKeys)
+	info.MultiKeyStatusList = remappedStatus
+	info.MultiKeyDisabledReason = remappedReason
+	info.MultiKeyDisabledTime = remappedTime
+	return changed
+}
+
+func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex map[int]string) (map[int]*ChannelKeyUsage, error) {
 	if channel == nil {
 		return nil, errors.New("channel is nil")
 	}
@@ -203,23 +320,9 @@ func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, e
 		return currentUsages, nil
 	}
 
-	type currentKeyMeta struct {
-		Fingerprint string
-		Index       int
-		Mask        string
-	}
-
-	currentKeys := make([]currentKeyMeta, 0, len(keys))
-	for idx, key := range keys {
-		fingerprint, err := FingerprintChannelKey(key)
-		if err != nil {
-			return nil, err
-		}
-		currentKeys = append(currentKeys, currentKeyMeta{
-			Fingerprint: fingerprint,
-			Index:       idx,
-			Mask:        MaskChannelKey(key),
-		})
+	currentKeys, err := buildChannelKeyMetas(keys)
+	if err != nil {
+		return nil, err
 	}
 
 	var existingUsages []ChannelKeyUsage
@@ -230,6 +333,16 @@ func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, e
 	existingByFingerprint := make(map[string]*ChannelKeyUsage, len(existingUsages))
 	for i := range existingUsages {
 		existingByFingerprint[existingUsages[i].KeyFingerprint] = &existingUsages[i]
+	}
+
+	channelInfoChanged := false
+	if len(previousFingerprintsByIndex) > 0 {
+		channelInfoChanged = remapChannelInfoByFingerprint(&channel.ChannelInfo, currentKeys, previousFingerprintsByIndex)
+	} else {
+		beforeSize := channel.ChannelInfo.MultiKeySize
+		normalizeChannelInfoStatusMaps(&channel.ChannelInfo)
+		channel.ChannelInfo.MultiKeySize = len(currentKeys)
+		channelInfoChanged = beforeSize != channel.ChannelInfo.MultiKeySize
 	}
 
 	now := common.GetTimestamp()
@@ -285,7 +398,17 @@ func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, e
 		}
 	}
 
+	if channelInfoChanged {
+		if err := channel.SaveChannelInfo(); err != nil {
+			return nil, err
+		}
+	}
+
 	return currentUsages, nil
+}
+
+func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, error) {
+	return ensureChannelKeyUsageRecords(channel, nil)
 }
 
 func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
