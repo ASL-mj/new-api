@@ -91,6 +91,68 @@ type ChannelUsageStats struct {
 	Balance             float64 `json:"balance"`
 }
 
+func GetChannelKeyUsages(channel *Channel) ([]ChannelKeyUsage, error) {
+	if channel == nil {
+		return nil, errors.New("channel is nil")
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return nil, errors.New("channel is not multi-key")
+	}
+	current, err := EnsureChannelKeyUsageRecords(channel)
+	if err != nil {
+		return nil, err
+	}
+	usages := make([]ChannelKeyUsage, 0, len(current))
+	for index := 0; index < len(channel.GetKeys()); index++ {
+		if usage := current[index]; usage != nil {
+			usages = append(usages, *usage)
+		}
+	}
+	return usages, nil
+}
+
+func ResetChannelKeyQuotaUsage(channelID int, fingerprint string, resetAt int64) error {
+	if channelID <= 0 || strings.TrimSpace(fingerprint) == "" {
+		return errors.New("invalid channel key identity")
+	}
+	result := DB.Model(&ChannelKeyUsage{}).
+		Where("channel_id = ? AND key_fingerprint = ?", channelID, fingerprint).
+		Updates(map[string]interface{}{
+			"quota_limit_used":     0,
+			"quota_limit_reset_at": resetAt,
+			"updated_at":           resetAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func UpdateChannelKeyQuotaLimit(channelID int, fingerprint string, quotaLimit int64) error {
+	if channelID <= 0 || strings.TrimSpace(fingerprint) == "" {
+		return errors.New("invalid channel key identity")
+	}
+	if quotaLimit < 0 {
+		return errors.New("quota limit cannot be negative")
+	}
+	result := DB.Model(&ChannelKeyUsage{}).
+		Where("channel_id = ? AND key_fingerprint = ?", channelID, fingerprint).
+		Updates(map[string]interface{}{
+			"quota_limit": quotaLimit,
+			"updated_at":  common.GetTimestamp(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 type channelUsageDailyAggregate struct {
 	ChannelID           int
 	TodayQuota          int64

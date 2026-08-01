@@ -28,6 +28,21 @@ func channelUsageDateFromTime(at time.Time) (string, error) {
 	return at.In(loc).Format("2006-01-02"), nil
 }
 
+func GetChannelUsageDateRange(at time.Time, days int) (string, string, error) {
+	if days <= 0 {
+		return "", "", fmt.Errorf("days must be positive")
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	loc, err := getChannelUsageLocation()
+	if err != nil {
+		return "", "", err
+	}
+	local := at.In(loc)
+	return local.Format("2006-01-02"), local.AddDate(0, 0, -(days - 1)).Format("2006-01-02"), nil
+}
+
 func getChannelUsageLocation() (*time.Location, error) {
 	timezone := getChannelUsageTimezoneName()
 

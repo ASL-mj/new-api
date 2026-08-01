@@ -434,6 +434,19 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
+	if channel.QuotaLimit < 0 {
+		return fmt.Errorf("渠道限额不能小于 0")
+	}
+	if channel.QuotaLimitMode != "" && model.NormalizeQuotaLimitMode(channel.QuotaLimitMode) != channel.QuotaLimitMode {
+		return fmt.Errorf("无效的渠道限额模式")
+	}
+	if isAdd && !channel.ChannelInfo.IsMultiKey &&
+		(channel.QuotaLimitMode == model.ChannelQuotaLimitModeKey || channel.QuotaLimitMode == model.ChannelQuotaLimitModeBoth) {
+		return fmt.Errorf("单密钥渠道不支持密钥限额模式")
+	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -867,6 +880,14 @@ func UpdateChannel(c *gin.Context) {
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
+	if !channel.ChannelInfo.IsMultiKey &&
+		(channel.QuotaLimitMode == model.ChannelQuotaLimitModeKey || channel.QuotaLimitMode == model.ChannelQuotaLimitModeBoth) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "单密钥渠道不支持密钥限额模式",
+		})
+		return
+	}
 	if channel.Status == common.ChannelStatusEnabled && originChannel.Status != common.ChannelStatusEnabled {
 		if err := originChannel.CanEnableChannel(); err != nil {
 			c.JSON(http.StatusOK, gin.H{
