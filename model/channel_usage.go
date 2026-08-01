@@ -67,6 +67,69 @@ func (ChannelUsageDaily) TableName() string {
 	return "channel_usage_daily"
 }
 
+type ChannelUsageApplyResult struct {
+	UsedQuota            int64
+	QuotaLimitUsed       int64
+	QuotaLimit           int64
+	Status               int
+	ChannelJustExhausted bool
+}
+
+func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error) {
+	var result ChannelUsageApplyResult
+	if DB == nil {
+		return result, errors.New("database not initialized")
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if quota > 0 {
+			updateResult := tx.Model(&Channel{}).
+				Where("id = ?", channelID).
+				Updates(map[string]interface{}{
+					"used_quota": gorm.Expr("used_quota + ?", quota),
+					"quota_limit_used": gorm.Expr(
+						"quota_limit_used + CASE WHEN quota_limit > 0 AND quota_limit_mode IN ? THEN ? ELSE 0 END",
+						[]string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth},
+						quota,
+					),
+				})
+			if updateResult.Error != nil {
+				return updateResult.Error
+			}
+			if updateResult.RowsAffected == 0 {
+				return gorm.ErrRecordNotFound
+			}
+
+			statusUpdateResult := tx.Model(&Channel{}).
+				Where(
+					"id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit",
+					channelID,
+					common.ChannelStatusEnabled,
+					[]string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth},
+				).
+				Update("status", common.ChannelStatusAutoDisabled)
+			if statusUpdateResult.Error != nil {
+				return statusUpdateResult.Error
+			}
+			result.ChannelJustExhausted = statusUpdateResult.RowsAffected == 1
+		}
+
+		var channel Channel
+		if err := tx.Select("used_quota", "quota_limit_used", "quota_limit", "status").
+			First(&channel, channelID).Error; err != nil {
+			return err
+		}
+
+		result.UsedQuota = channel.UsedQuota
+		result.QuotaLimitUsed = channel.QuotaLimitUsed
+		result.QuotaLimit = channel.QuotaLimit
+		result.Status = channel.Status
+		return nil
+	})
+
+	return result, err
+}
+
 func getChannelKeyFingerprintSecret() (string, error) {
 	if cryptoSecretProvidedByEnv() {
 		return common.CryptoSecret, nil

@@ -1,9 +1,12 @@
 package model
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
@@ -27,6 +30,44 @@ func prepareChannelUsageTable(t *testing.T) {
 	sqlDB, err := isolatedDB.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
+
+	DB = isolatedDB
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}))
+
+	t.Cleanup(func() {
+		DB = previousDB
+		common.UsingSQLite = previousUsingSQLite
+		common.UsingMySQL = previousUsingMySQL
+		common.UsingPostgreSQL = previousUsingPostgreSQL
+		_ = sqlDB.Close()
+		modelTestDBMutex.Unlock()
+	})
+}
+
+func prepareConcurrentChannelUsageTable(t *testing.T) {
+	t.Helper()
+	modelTestDBMutex.Lock()
+
+	previousDB := DB
+	previousUsingSQLite := common.UsingSQLite
+	previousUsingMySQL := common.UsingMySQL
+	previousUsingPostgreSQL := common.UsingPostgreSQL
+
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)",
+		filepath.Join(t.TempDir(), "channel-usage-concurrency.db"),
+	)
+	isolatedDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+
+	sqlDB, err := isolatedDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(10)
+	sqlDB.SetMaxIdleConns(10)
 
 	DB = isolatedDB
 	common.UsingSQLite = true
@@ -199,6 +240,263 @@ func TestChannelUpdatePersistsZeroQuotaLimit(t *testing.T) {
 	var reloaded Channel
 	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
 	assert.EqualValues(t, 0, reloaded.QuotaLimit)
+}
+
+func TestApplyChannelUsageTracksUsedQuotaForNonQuotaModes(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	testCases := []struct {
+		name  string
+		mode  string
+		limit int64
+	}{
+		{name: "none mode", mode: ChannelQuotaLimitModeNone, limit: 100},
+		{name: "key mode", mode: ChannelQuotaLimitModeKey, limit: 100},
+		{name: "channel mode with unlimited quota", mode: ChannelQuotaLimitModeChannel, limit: 0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &Channel{
+				Name:           tc.name,
+				Key:            "test-key",
+				Status:         common.ChannelStatusEnabled,
+				UsedQuota:      10,
+				QuotaLimitMode: tc.mode,
+				QuotaLimit:     tc.limit,
+				QuotaLimitUsed: 4,
+				Group:          "default",
+				Models:         "gpt-4o-mini",
+			}
+			require.NoError(t, DB.Create(channel).Error)
+
+			result, err := ApplyChannelUsage(channel.Id, 7)
+			require.NoError(t, err)
+
+			assert.EqualValues(t, 17, result.UsedQuota)
+			assert.EqualValues(t, 4, result.QuotaLimitUsed)
+			assert.EqualValues(t, tc.limit, result.QuotaLimit)
+			assert.Equal(t, common.ChannelStatusEnabled, result.Status)
+			assert.False(t, result.ChannelJustExhausted)
+		})
+	}
+}
+
+func TestApplyChannelUsageReturnsFreshStateForNonPositiveQuota(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "channel-usage-no-op",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      7,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     50,
+		QuotaLimitUsed: 3,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	zeroResult, err := ApplyChannelUsage(channel.Id, 0)
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, zeroResult.UsedQuota)
+	assert.EqualValues(t, 3, zeroResult.QuotaLimitUsed)
+	assert.EqualValues(t, 50, zeroResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, zeroResult.Status)
+	assert.False(t, zeroResult.ChannelJustExhausted)
+
+	negativeResult, err := ApplyChannelUsage(channel.Id, -5)
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, negativeResult.UsedQuota)
+	assert.EqualValues(t, 3, negativeResult.QuotaLimitUsed)
+	assert.EqualValues(t, 50, negativeResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, negativeResult.Status)
+	assert.False(t, negativeResult.ChannelJustExhausted)
+}
+
+func TestApplyChannelUsageCrossesQuotaAndDisablesChannelAfterFullAccounting(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "channel-usage-cross-limit",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      90,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 90,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	firstResult, err := ApplyChannelUsage(channel.Id, 15)
+	require.NoError(t, err)
+	assert.EqualValues(t, 105, firstResult.UsedQuota)
+	assert.EqualValues(t, 105, firstResult.QuotaLimitUsed)
+	assert.EqualValues(t, 100, firstResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, firstResult.Status)
+	assert.True(t, firstResult.ChannelJustExhausted)
+
+	secondResult, err := ApplyChannelUsage(channel.Id, 15)
+	require.NoError(t, err)
+	assert.EqualValues(t, 120, secondResult.UsedQuota)
+	assert.EqualValues(t, 120, secondResult.QuotaLimitUsed)
+	assert.EqualValues(t, 100, secondResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, secondResult.Status)
+	assert.False(t, secondResult.ChannelJustExhausted)
+}
+
+func TestApplyChannelUsageConcurrentRequestsDoNotLoseUsage(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "channel-usage-concurrent",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     1000,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	const goroutineCount = 10
+	const quotaPerRequest = 11
+
+	results := make(chan ChannelUsageApplyResult, goroutineCount)
+	errorsCh := make(chan error, goroutineCount)
+	start := make(chan struct{})
+
+	var waitGroup sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := applyChannelUsageWithRetry(channel.Id, quotaPerRequest)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, results, goroutineCount)
+	exhaustedCount := 0
+	for result := range results {
+		if result.ChannelJustExhausted {
+			exhaustedCount++
+		}
+	}
+	assert.Zero(t, exhaustedCount)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, goroutineCount*quotaPerRequest, reloaded.UsedQuota)
+	assert.EqualValues(t, goroutineCount*quotaPerRequest, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+}
+
+func TestApplyChannelUsageConcurrentExhaustionHasSingleWinner(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "channel-usage-concurrent-exhaustion",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      90,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 90,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	const goroutineCount = 2
+	const quotaPerRequest = 15
+
+	results := make(chan ChannelUsageApplyResult, goroutineCount)
+	errorsCh := make(chan error, goroutineCount)
+	start := make(chan struct{})
+
+	var waitGroup sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := applyChannelUsageWithRetry(channel.Id, quotaPerRequest)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, results, goroutineCount)
+	exhaustedCount := 0
+	for result := range results {
+		if result.ChannelJustExhausted {
+			exhaustedCount++
+		}
+	}
+	assert.Equal(t, 1, exhaustedCount)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 120, reloaded.UsedQuota)
+	assert.EqualValues(t, 120, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+}
+
+func applyChannelUsageWithRetry(channelID int, quota int) (ChannelUsageApplyResult, error) {
+	var (
+		result ChannelUsageApplyResult
+		err    error
+	)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		result, err = ApplyChannelUsage(channelID, quota)
+		if err == nil || !isSQLiteBusyError(err) {
+			return result, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+
+	return result, err
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "sqlite_busy")
 }
 
 func TestFingerprintChannelKeyUsesStableSecretKeyedHMAC(t *testing.T) {
