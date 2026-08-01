@@ -50,6 +50,11 @@ import {
   IconAlertTriangle,
 } from '@douyinfe/semi-icons';
 import { FaRandom } from 'react-icons/fa';
+import {
+  TodayAnd30dUsageCell,
+  UpstreamBalanceCell,
+  UsedAndLimitCell,
+} from './renderers/ChannelUsageCells';
 
 // Render functions
 const renderType = (type, record = {}, t) => {
@@ -327,6 +332,9 @@ export const getChannelsColumns = ({
   setCurrentMultiKeyChannel,
   openUpstreamUpdateModal,
   detectChannelUpstreamUpdates,
+  usageStats,
+  usageStatsLoading,
+  usageStatsError,
 }) => {
   return [
     {
@@ -523,54 +531,41 @@ export const getChannelsColumns = ({
       render: (text, record, index) => <div>{renderResponseTime(text, t)}</div>,
     },
     {
-      key: COLUMN_KEYS.BALANCE,
-      title: t('已用/剩余'),
-      dataIndex: 'expired_time',
-      render: (text, record, index) => {
-        if (record.children === undefined) {
-          return (
-            <div>
-              <Space spacing={1}>
-                <Tooltip content={t('已用额度')}>
-                  <Tag color='white' type='ghost' shape='circle'>
-                    {renderQuota(record.used_quota)}
-                  </Tag>
-                </Tooltip>
-                <Tooltip
-                  content={
-                    record.type === 57
-                      ? t('查看 Codex 帐号信息与用量')
-                      : t('剩余额度') +
-                        ': ' +
-                        renderQuotaWithAmount(record.balance) +
-                        t('，点击更新')
-                  }
-                >
-                  <Tag
-                    color={record.type === 57 ? 'light-blue' : 'white'}
-                    type={record.type === 57 ? 'light' : 'ghost'}
-                    shape='circle'
-                    className={record.type === 57 ? 'cursor-pointer' : ''}
-                    onClick={() => updateChannelBalance(record)}
-                  >
-                    {record.type === 57
-                      ? t('帐号信息')
-                      : renderQuotaWithAmount(record.balance)}
-                  </Tag>
-                </Tooltip>
-              </Space>
-            </div>
-          );
-        } else {
-          return (
-            <Tooltip content={t('已用额度')}>
-              <Tag color='white' type='ghost' shape='circle'>
-                {renderQuota(record.used_quota)}
-              </Tag>
-            </Tooltip>
-          );
-        }
-      },
+      key: COLUMN_KEYS.TODAY_30D,
+      title: t('今日/30日'),
+      render: (_, record) => (
+        <TodayAnd30dUsageCell
+          record={record}
+          stats={usageStats}
+          loading={usageStatsLoading}
+          error={usageStatsError}
+        />
+      ),
+    },
+    {
+      key: COLUMN_KEYS.USED_LIMIT,
+      title: t('已用/限额'),
+      render: (_, record) => (
+        <UsedAndLimitCell
+          record={record}
+          stats={usageStats}
+          loading={usageStatsLoading}
+          error={usageStatsError}
+        />
+      ),
+    },
+    {
+      key: COLUMN_KEYS.UPSTREAM_BALANCE,
+      title: t('上游余额'),
+      render: (_, record) => (
+        <UpstreamBalanceCell
+          record={record}
+          stats={usageStats}
+          loading={usageStatsLoading}
+          error={usageStatsError}
+          onRefresh={updateChannelBalance}
+        />
+      ),
     },
     {
       key: COLUMN_KEYS.PRIORITY,

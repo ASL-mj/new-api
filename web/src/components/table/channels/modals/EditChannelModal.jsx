@@ -188,6 +188,10 @@ const EditChannelModal = (props) => {
     weight: 0,
     tag: '',
     multi_key_mode: 'random',
+    quota_limit_mode: 'none',
+    quota_limit: 0,
+    quota_limit_used: 0,
+    quota_limit_reset_at: 0,
     // 渠道额外设置的默认值
     force_format: false,
     thinking_to_content: false,
@@ -699,6 +703,27 @@ const EditChannelModal = (props) => {
       }
     }
     //setAutoBan
+  };
+
+  const resetChannelQuotaUsage = () => {
+    Modal.confirm({
+      title: t('重置渠道限额用量'),
+      content: t('只会清零已用限额，不会自动启用当前渠道。'),
+      onOk: async () => {
+        const response = await API.post(`/api/channel/${channelId}/quota/reset`);
+        if (!response.data.success) {
+          showError(response.data.message);
+          return;
+        }
+        handleInputChange('quota_limit_used', 0);
+        handleInputChange(
+          'quota_limit_reset_at',
+          response.data.data?.quota_limit_reset_at || 0,
+        );
+        showSuccess(t('渠道限额用量已重置'));
+        props.refresh();
+      },
+    });
   };
 
   const formatJsonField = (fieldName) => {
@@ -3638,6 +3663,55 @@ const EditChannelModal = (props) => {
                       '键为请求中的模型名称，值为要替换的模型名称',
                     )}
                   />
+
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Select
+                        field='quota_limit_mode'
+                        label={t('渠道限额模式')}
+                        optionList={[
+                          { value: 'none', label: t('不限额') },
+                          { value: 'channel', label: t('渠道总限额') },
+                          ...((isMultiKeyChannel || (!isEdit && multiToSingle))
+                            ? [
+                                { value: 'key', label: t('按密钥限额') },
+                                { value: 'both', label: t('渠道与密钥同时限额') },
+                              ]
+                            : []),
+                        ]}
+                        onChange={(value) =>
+                          handleInputChange('quota_limit_mode', value)
+                        }
+                        extraText={t('达到限额后自动禁用，重新启用前必须先重置用量')}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Form.InputNumber
+                        field='quota_limit'
+                        label={t('限额')}
+                        min={0}
+                        precision={0}
+                        style={{ width: '100%' }}
+                        onChange={(value) =>
+                          handleInputChange('quota_limit', Number(value || 0))
+                        }
+                        extraText={t('填写 0 表示无限额')}
+                      />
+                    </Col>
+                  </Row>
+                  {isEdit && (
+                    <div className='flex items-center justify-between rounded-lg border border-solid border-semi-color-border px-3 py-2'>
+                      <div className='flex flex-col'>
+                        <Text>{t('当前限额已用')}: {inputs.quota_limit_used || 0}</Text>
+                        <Text type='tertiary' size='small'>
+                          {t('重置只清零用量，不会自动启用渠道')}
+                        </Text>
+                      </div>
+                      <Button type='warning' theme='light' onClick={resetChannelQuotaUsage}>
+                        {t('重置用量')}
+                      </Button>
+                    </div>
+                  )}
 
                   {/* Auto Ban - Core Config */}
                   <Form.Switch

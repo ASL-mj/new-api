@@ -36,6 +36,7 @@ import {
 import { useIsMobile } from '../common/useIsMobile';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import { useChannelUpstreamUpdates } from './useChannelUpstreamUpdates';
+import { useChannelUsageStats } from './useChannelUsageStats';
 import { parseUpstreamUpdateMeta } from './upstreamUpdateUtils';
 import { Modal, Button } from '@douyinfe/semi-ui';
 import { openCodexUsageModal } from '../../components/table/channels/modals/CodexUsageModal';
@@ -137,7 +138,9 @@ export const useChannelsData = () => {
     TYPE: 'type',
     STATUS: 'status',
     RESPONSE_TIME: 'response_time',
-    BALANCE: 'balance',
+    TODAY_30D: 'today_30d',
+    USED_LIMIT: 'used_limit',
+    UPSTREAM_BALANCE: 'upstream_balance',
     PRIORITY: 'priority',
     WEIGHT: 'weight',
     OPERATE: 'operate',
@@ -177,7 +180,9 @@ export const useChannelsData = () => {
       [COLUMN_KEYS.TYPE]: true,
       [COLUMN_KEYS.STATUS]: true,
       [COLUMN_KEYS.RESPONSE_TIME]: true,
-      [COLUMN_KEYS.BALANCE]: true,
+      [COLUMN_KEYS.TODAY_30D]: true,
+      [COLUMN_KEYS.USED_LIMIT]: true,
+      [COLUMN_KEYS.UPSTREAM_BALANCE]: true,
       [COLUMN_KEYS.PRIORITY]: true,
       [COLUMN_KEYS.WEIGHT]: true,
       [COLUMN_KEYS.OPERATE]: true,
@@ -438,6 +443,11 @@ export const useChannelsData = () => {
   };
 
   const upstreamUpdates = useChannelUpstreamUpdates({ t, refresh });
+  const usageColumnsVisible =
+    visibleColumns[COLUMN_KEYS.TODAY_30D] ||
+    visibleColumns[COLUMN_KEYS.USED_LIMIT] ||
+    visibleColumns[COLUMN_KEYS.UPSTREAM_BALANCE];
+  const channelUsage = useChannelUsageStats(channels, usageColumnsVisible);
 
   // Channel management
   const manageChannel = async (id, action, record, value) => {
@@ -1203,6 +1213,7 @@ export const useChannelsData = () => {
     setShowMultiKeyManageModal,
     currentMultiKeyChannel,
     setCurrentMultiKeyChannel,
+    ...channelUsage,
     ...upstreamUpdates,
 
     // Form

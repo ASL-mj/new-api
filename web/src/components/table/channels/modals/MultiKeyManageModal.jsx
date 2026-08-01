@@ -36,6 +36,7 @@ import {
   Badge,
   Progress,
   Card,
+  InputNumber,
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
@@ -92,11 +93,22 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
         requestData.status = status;
       }
 
-      const res = await API.post('/api/channel/multi_key/manage', requestData);
+      const [res, usageRes] = await Promise.all([
+        API.post('/api/channel/multi_key/manage', requestData),
+        API.get(`/api/channel/${channel.id}/key-usages`),
+      ]);
 
-      if (res.data.success) {
+      if (res.data.success && usageRes.data.success) {
         const data = res.data.data;
-        setKeyStatusList(data.keys || []);
+        const usageByIndex = new Map(
+          (usageRes.data.data || []).map((item) => [item.key_index, item]),
+        );
+        setKeyStatusList(
+          (data.keys || []).map((item) => ({
+            ...item,
+            ...(usageByIndex.get(item.index) || {}),
+          })),
+        );
         setTotal(data.total || 0);
         setCurrentPage(data.page || 1);
         setPageSize(data.page_size || 10);
@@ -107,7 +119,7 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
         setManualDisabledCount(data.manual_disabled_count || 0);
         setAutoDisabledCount(data.auto_disabled_count || 0);
       } else {
-        showError(res.data.message);
+        showError(res.data.message || usageRes.data.message);
       }
     } catch (error) {
       console.error(error);
@@ -115,6 +127,50 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleResetKeyQuota = async (record) => {
+    const res = await API.post(
+      `/api/channel/${channel.id}/key-usages/${encodeURIComponent(record.key_fingerprint)}/reset`,
+    );
+    if (!res.data.success) {
+      showError(res.data.message);
+      return;
+    }
+    showSuccess(t('密钥限额用量已重置'));
+    await loadKeyStatus(currentPage, pageSize);
+  };
+
+  const handleEditKeyQuota = (record) => {
+    let nextLimit = Number(record.quota_limit || 0);
+    Modal.confirm({
+      title: t('修改密钥限额'),
+      content: (
+        <div className='flex flex-col gap-2'>
+          <Text type='tertiary'>
+            {t('填写 0 表示无限额，修改限额不会改变当前启用状态。')}
+          </Text>
+          <InputNumber
+            defaultValue={nextLimit}
+            min={0}
+            precision={0}
+            style={{ width: '100%' }}
+            onChange={(value) => {
+              nextLimit = Number(value || 0);
+            }}
+          />
+        </div>
+      ),
+      onOk: async () => {
+        const res = await API.put(
+          `/api/channel/${channel.id}/key-usages/${encodeURIComponent(record.key_fingerprint)}/limit`,
+          { quota_limit: nextLimit },
+        );
+        if (!res.data.success) throw new Error(res.data.message);
+        showSuccess(t('密钥限额已更新'));
+        await loadKeyStatus(currentPage, pageSize);
+      },
+    });
   };
 
   // Disable a specific key
@@ -362,6 +418,11 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       dataIndex: 'index',
       render: (text) => `#${Number(text) + 1}`,
     },
+    {
+      title: t('密钥预览'),
+      dataIndex: 'key_mask',
+      render: (text) => <Text code>{text || '-'}</Text>,
+    },
     // {
     //   title: t('密钥预览'),
     //   dataIndex: 'key_preview',
@@ -407,12 +468,43 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       },
     },
     {
+      title: t('已用/限额'),
+      key: 'quota',
+      render: (_, record) => {
+        const used = Number(record.quota_limit_used || 0);
+        const limit = Number(record.quota_limit || 0);
+        const percent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+        return (
+          <div className='min-w-32'>
+            <Text size='small'>
+              {used} / {limit > 0 ? limit : '∞'}
+            </Text>
+            {limit > 0 && (
+              <Progress percent={percent} showInfo={false} size='small' />
+            )}
+          </div>
+        );
+      },
+    },
+    {
       title: t('操作'),
       key: 'action',
       fixed: 'right',
       width: 150,
       render: (_, record) => (
-        <Space>
+        <Space wrap>
+          <Button size='small' onClick={() => handleEditKeyQuota(record)}>
+            {t('限额')}
+          </Button>
+          <Popconfirm
+            title={t('确定重置该密钥的限额用量吗？')}
+            content={t('重置后不会自动启用密钥或渠道')}
+            onConfirm={() => handleResetKeyQuota(record)}
+          >
+            <Button size='small' type='warning' theme='light'>
+              {t('重置')}
+            </Button>
+          </Popconfirm>
           {record.status === 1 ? (
             <Button
               type='danger'
