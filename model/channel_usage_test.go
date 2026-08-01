@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,6 +36,40 @@ func prepareChannelUsageTable(t *testing.T) {
 
 	t.Cleanup(func() {
 		DB = previousDB
+		common.UsingSQLite = previousUsingSQLite
+		common.UsingMySQL = previousUsingMySQL
+		common.UsingPostgreSQL = previousUsingPostgreSQL
+		_ = sqlDB.Close()
+		modelTestDBMutex.Unlock()
+	})
+}
+
+func prepareChannelUsageMigrationDB(t *testing.T) {
+	t.Helper()
+	modelTestDBMutex.Lock()
+
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousUsingSQLite := common.UsingSQLite
+	previousUsingMySQL := common.UsingMySQL
+	previousUsingPostgreSQL := common.UsingPostgreSQL
+
+	isolatedDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+
+	sqlDB, err := isolatedDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	DB = isolatedDB
+	LOG_DB = isolatedDB
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
 		common.UsingSQLite = previousUsingSQLite
 		common.UsingMySQL = previousUsingMySQL
 		common.UsingPostgreSQL = previousUsingPostgreSQL
@@ -156,4 +191,99 @@ func TestChannelUpdatePersistsZeroQuotaLimit(t *testing.T) {
 	var reloaded Channel
 	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
 	assert.EqualValues(t, 0, reloaded.QuotaLimit)
+}
+
+func TestFingerprintChannelKeyUsesStableSecretKeyedHMAC(t *testing.T) {
+	previousSecret := common.CryptoSecret
+	common.CryptoSecret = "channel-usage-secret"
+	t.Cleanup(func() {
+		common.CryptoSecret = previousSecret
+	})
+
+	firstKey := "sk-channel-key-alpha"
+	secondKey := "sk-channel-key-beta"
+
+	firstFingerprint := FingerprintChannelKey(firstKey)
+	assert.Equal(t, firstFingerprint, FingerprintChannelKey(firstKey))
+	assert.Equal(t, firstFingerprint, FingerprintChannelKey([]string{secondKey, firstKey}[1]))
+	assert.NotEqual(t, firstFingerprint, FingerprintChannelKey(secondKey))
+	assert.Len(t, firstFingerprint, 64)
+	assert.True(t, strings.IndexFunc(firstFingerprint, func(r rune) bool {
+		return !strings.ContainsRune("0123456789abcdef", r)
+	}) == -1)
+}
+
+func TestMaskChannelKeyAlwaysReturnsMaskedValue(t *testing.T) {
+	rawKey := "sk-channel-secret-12345678"
+
+	assert.Equal(t, MaskTokenKey(rawKey), MaskChannelKey(rawKey))
+	assert.NotEqual(t, rawKey, MaskChannelKey(rawKey))
+	assert.NotContains(t, MaskChannelKey(rawKey), rawKey)
+	assert.Equal(t, "****", MaskChannelKey("abcd"))
+	assert.Equal(t, "", MaskChannelKey(""))
+}
+
+func TestChannelKeyUsageJSONOmitsPlaintextKey(t *testing.T) {
+	rawKey := "sk-channel-secret-12345678"
+	payload, err := common.Marshal(ChannelKeyUsage{
+		ChannelId:      1,
+		KeyFingerprint: FingerprintChannelKey(rawKey),
+		KeyIndex:       2,
+		KeyMask:        MaskChannelKey(rawKey),
+	})
+	require.NoError(t, err)
+
+	encoded := string(payload)
+	assert.Contains(t, encoded, `"key_mask":`)
+	assert.Contains(t, encoded, `"key_fingerprint":`)
+	assert.NotContains(t, encoded, rawKey)
+	assert.NotContains(t, encoded, `"key":`)
+}
+
+func TestChannelUsageModelsMigrateAndEnforceUniqueConstraints(t *testing.T) {
+	prepareChannelUsageMigrationDB(t)
+
+	require.NoError(t, migrateDB())
+
+	migrator := DB.Migrator()
+	assert.True(t, migrator.HasTable(&ChannelKeyUsage{}))
+	assert.True(t, migrator.HasTable(&ChannelUsageDaily{}))
+	assert.True(t, migrator.HasIndex(&ChannelKeyUsage{}, "idx_channel_key_fingerprint"))
+	assert.True(t, migrator.HasIndex(&ChannelUsageDaily{}, "idx_channel_usage_day"))
+
+	keyUsage := &ChannelKeyUsage{
+		ChannelId:      100,
+		KeyFingerprint: FingerprintChannelKey("sk-usage-primary"),
+		KeyIndex:       0,
+		KeyMask:        MaskChannelKey("sk-usage-primary"),
+		Status:         common.ChannelStatusEnabled,
+	}
+	require.NoError(t, DB.Create(keyUsage).Error)
+
+	duplicateKeyUsage := &ChannelKeyUsage{
+		ChannelId:      keyUsage.ChannelId,
+		KeyFingerprint: keyUsage.KeyFingerprint,
+		KeyIndex:       1,
+		KeyMask:        MaskChannelKey("sk-usage-primary"),
+		Status:         common.ChannelStatusEnabled,
+	}
+	assert.Error(t, DB.Create(duplicateKeyUsage).Error)
+
+	dailyUsage := &ChannelUsageDaily{
+		ChannelId:      100,
+		KeyFingerprint: "",
+		UsageDate:      "2026-08-01",
+		Quota:          100,
+		TokenUsed:      200,
+		RequestCount:   3,
+	}
+	require.NoError(t, DB.Create(dailyUsage).Error)
+
+	duplicateDailyUsage := &ChannelUsageDaily{
+		ChannelId:      dailyUsage.ChannelId,
+		KeyFingerprint: dailyUsage.KeyFingerprint,
+		UsageDate:      dailyUsage.UsageDate,
+		Quota:          1,
+	}
+	assert.Error(t, DB.Create(duplicateDailyUsage).Error)
 }
