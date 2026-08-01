@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
+	"gorm.io/gorm"
 )
 
 const (
@@ -524,6 +526,10 @@ func (channel *Channel) GetStatusCodeMapping() string {
 	return *channel.StatusCodeMapping
 }
 
+func sameChannelKeyOrder(previousRawKey string, currentRawKey string) bool {
+	return reflect.DeepEqual((&Channel{Key: previousRawKey}).GetKeys(), (&Channel{Key: currentRawKey}).GetKeys())
+}
+
 func (channel *Channel) Insert() error {
 	var err error
 	err = DB.Create(channel).Error
@@ -536,69 +542,73 @@ func (channel *Channel) Insert() error {
 
 func (channel *Channel) Update() error {
 	channel.QuotaLimitMode = NormalizeQuotaLimitMode(channel.QuotaLimitMode)
-	var existingChannel *Channel
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if channel.ChannelInfo.IsMultiKey {
-		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
-		} else {
-			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
-				existingChannel = existing
-				keyStr = existing.Key
+	var err error
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var existingChannel *Channel
+		if channel.Id != 0 {
+			existingChannel = &Channel{}
+			if err := tx.First(existingChannel, "id = ?", channel.Id).Error; err != nil {
+				return err
 			}
 		}
-		if existingChannel == nil && channel.Id != 0 {
-			existingChannel, _ = GetChannelById(channel.Id, true)
-		}
-		// Parse the key list (supports newline separation or JSON array)
-		keys := (&Channel{Key: keyStr}).GetKeys()
-		currentKeys, err := buildChannelKeyMetas(keys)
-		if err != nil {
-			return err
-		}
-		if existingChannel != nil {
-			previousFingerprintsByIndex, err := buildChannelKeyFingerprintsByIndexFromRawKey(existingChannel.Key)
+
+		if channel.ChannelInfo.IsMultiKey {
+			resolvedKey := channel.Key
+			if resolvedKey == "" && existingChannel != nil {
+				resolvedKey = existingChannel.Key
+			}
+			channel.Key = resolvedKey
+			currentKeys, err := buildChannelKeyMetas((&Channel{Key: resolvedKey}).GetKeys())
 			if err != nil {
 				return err
 			}
-			channel.ChannelInfo.MultiKeyStatusList = existingChannel.ChannelInfo.MultiKeyStatusList
-			channel.ChannelInfo.MultiKeyDisabledReason = existingChannel.ChannelInfo.MultiKeyDisabledReason
-			channel.ChannelInfo.MultiKeyDisabledTime = existingChannel.ChannelInfo.MultiKeyDisabledTime
-			remapChannelInfoByFingerprint(&channel.ChannelInfo, currentKeys, previousFingerprintsByIndex)
-		} else {
-			channel.ChannelInfo.MultiKeySize = len(keys)
-			normalizeChannelInfoStatusMaps(&channel.ChannelInfo)
+
+			channel.ChannelInfo.MultiKeySize = len(currentKeys)
+			if existingChannel != nil && !sameChannelKeyOrder(existingChannel.Key, resolvedKey) {
+				previousFingerprintsByIndex, err := buildChannelKeyFingerprintsByIndexFromRawKey(existingChannel.Key)
+				if err != nil {
+					return err
+				}
+				channel.ChannelInfo.MultiKeyStatusList = existingChannel.ChannelInfo.MultiKeyStatusList
+				channel.ChannelInfo.MultiKeyDisabledReason = existingChannel.ChannelInfo.MultiKeyDisabledReason
+				channel.ChannelInfo.MultiKeyDisabledTime = existingChannel.ChannelInfo.MultiKeyDisabledTime
+				remapChannelInfoByFingerprint(&channel.ChannelInfo, currentKeys, previousFingerprintsByIndex)
+			} else {
+				normalizeChannelInfoStatusMaps(&channel.ChannelInfo)
+			}
 		}
-	}
-	var err error
-	err = DB.Model(channel).Updates(channel).Error
+
+		if err := tx.Model(channel).Updates(channel).Error; err != nil {
+			return err
+		}
+		if channel.ChannelInfo.IsMultiKey {
+			if err := persistChannelInfo(tx, channel); err != nil {
+				return err
+			}
+			if _, err := ensureChannelKeyUsageRecords(tx, channel); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(channel).
+			Select("quota_limit_mode", "quota_limit", "quota_limit_used", "quota_limit_reset_at").
+			Updates(map[string]interface{}{
+				"quota_limit_mode":     channel.QuotaLimitMode,
+				"quota_limit":          channel.QuotaLimit,
+				"quota_limit_used":     channel.QuotaLimitUsed,
+				"quota_limit_reset_at": channel.QuotaLimitResetAt,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.First(channel, "id = ?", channel.Id).Error
+	})
 	if err != nil {
 		return err
 	}
-	if channel.ChannelInfo.IsMultiKey {
-		err = channel.SaveChannelInfo()
-		if err != nil {
-			return err
-		}
-		if _, err = EnsureChannelKeyUsageRecords(channel); err != nil {
-			return err
-		}
-	}
-	err = DB.Model(channel).
-		Select("quota_limit_mode", "quota_limit", "quota_limit_used", "quota_limit_reset_at").
-		Updates(map[string]interface{}{
-			"quota_limit_mode":     channel.QuotaLimitMode,
-			"quota_limit":          channel.QuotaLimit,
-			"quota_limit_used":     channel.QuotaLimitUsed,
-			"quota_limit_reset_at": channel.QuotaLimitResetAt,
-		}).Error
-	if err != nil {
-		return err
-	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
+
 	err = channel.UpdateAbilities(nil)
+	if err == nil && common.MemoryCacheEnabled {
+		InitChannelCache()
+	}
 	return err
 }
 

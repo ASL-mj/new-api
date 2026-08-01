@@ -247,6 +247,16 @@ func normalizeChannelInfoStatusMaps(info *ChannelInfo) {
 	}
 }
 
+func persistChannelInfo(tx *gorm.DB, channel *Channel) error {
+	if tx == nil {
+		tx = DB
+	}
+	if tx == nil {
+		return errors.New("database not initialized")
+	}
+	return tx.Model(channel).Update("channel_info", channel.ChannelInfo).Error
+}
+
 func remapChannelInfoByFingerprint(info *ChannelInfo, currentKeys []channelKeyMeta, previousFingerprintsByIndex map[int]string) bool {
 	if info == nil {
 		return false
@@ -306,11 +316,14 @@ func remapChannelInfoByFingerprint(info *ChannelInfo, currentKeys []channelKeyMe
 	return changed
 }
 
-func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex map[int]string) (map[int]*ChannelKeyUsage, error) {
+func ensureChannelKeyUsageRecordsWithPrevious(tx *gorm.DB, channel *Channel, previousFingerprintsByIndex map[int]string) (map[int]*ChannelKeyUsage, error) {
 	if channel == nil {
 		return nil, errors.New("channel is nil")
 	}
-	if DB == nil {
+	if tx == nil {
+		tx = DB
+	}
+	if tx == nil {
 		return nil, errors.New("database not initialized")
 	}
 
@@ -326,7 +339,7 @@ func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex 
 	}
 
 	var existingUsages []ChannelKeyUsage
-	if err := DB.Where("channel_id = ?", channel.Id).Find(&existingUsages).Error; err != nil {
+	if err := tx.Where("channel_id = ?", channel.Id).Find(&existingUsages).Error; err != nil {
 		return nil, err
 	}
 
@@ -338,11 +351,6 @@ func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex 
 	channelInfoChanged := false
 	if len(previousFingerprintsByIndex) > 0 {
 		channelInfoChanged = remapChannelInfoByFingerprint(&channel.ChannelInfo, currentKeys, previousFingerprintsByIndex)
-	} else {
-		beforeSize := channel.ChannelInfo.MultiKeySize
-		normalizeChannelInfoStatusMaps(&channel.ChannelInfo)
-		channel.ChannelInfo.MultiKeySize = len(currentKeys)
-		channelInfoChanged = beforeSize != channel.ChannelInfo.MultiKeySize
 	}
 
 	now := common.GetTimestamp()
@@ -351,22 +359,21 @@ func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex 
 		createQuotaLimit = channel.QuotaLimit
 	}
 
+	needsRefresh := false
 	creates := make([]ChannelKeyUsage, 0)
 	for _, currentKey := range currentKeys {
 		if usage, ok := existingByFingerprint[currentKey.Fingerprint]; ok {
-			currentUsages[currentKey.Index] = usage
 			updates := map[string]interface{}{}
 			if usage.KeyIndex != currentKey.Index {
-				usage.KeyIndex = currentKey.Index
 				updates["key_index"] = currentKey.Index
 			}
 			if usage.KeyMask != currentKey.Mask {
-				usage.KeyMask = currentKey.Mask
 				updates["key_mask"] = currentKey.Mask
 			}
 			if len(updates) > 0 {
+				needsRefresh = true
 				updates["updated_at"] = now
-				if err := DB.Model(&ChannelKeyUsage{}).
+				if err := tx.Model(&ChannelKeyUsage{}).
 					Where("id = ?", usage.Id).
 					Updates(updates).Error; err != nil {
 					return nil, err
@@ -389,26 +396,50 @@ func ensureChannelKeyUsageRecords(channel *Channel, previousFingerprintsByIndex 
 	}
 
 	if len(creates) > 0 {
-		if err := DB.Create(&creates).Error; err != nil {
+		needsRefresh = true
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&creates).Error; err != nil {
 			return nil, err
-		}
-		for i := range creates {
-			usage := creates[i]
-			currentUsages[usage.KeyIndex] = &usage
 		}
 	}
 
 	if channelInfoChanged {
-		if err := channel.SaveChannelInfo(); err != nil {
+		if err := persistChannelInfo(tx, channel); err != nil {
 			return nil, err
 		}
+	}
+
+	var refreshedUsages []ChannelKeyUsage
+	if needsRefresh {
+		if err := tx.Session(&gorm.Session{NewDB: true}).
+			Where("channel_id = ?", channel.Id).
+			Find(&refreshedUsages).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		refreshedUsages = existingUsages
+	}
+
+	refreshedByFingerprint := make(map[string]*ChannelKeyUsage, len(refreshedUsages))
+	for i := range refreshedUsages {
+		refreshedByFingerprint[refreshedUsages[i].KeyFingerprint] = &refreshedUsages[i]
+	}
+	for _, currentKey := range currentKeys {
+		usage, ok := refreshedByFingerprint[currentKey.Fingerprint]
+		if !ok || usage == nil {
+			return nil, fmt.Errorf("channel key usage record missing after reconcile: channel_id=%d key_index=%d", channel.Id, currentKey.Index)
+		}
+		currentUsages[currentKey.Index] = usage
 	}
 
 	return currentUsages, nil
 }
 
+func ensureChannelKeyUsageRecords(tx *gorm.DB, channel *Channel) (map[int]*ChannelKeyUsage, error) {
+	return ensureChannelKeyUsageRecordsWithPrevious(tx, channel, nil)
+}
+
 func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, error) {
-	return ensureChannelKeyUsageRecords(channel, nil)
+	return ensureChannelKeyUsageRecords(DB, channel)
 }
 
 func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {

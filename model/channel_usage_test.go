@@ -2,6 +2,7 @@ package model
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -278,6 +279,119 @@ func TestChannelUpdatePersistsZeroQuotaLimit(t *testing.T) {
 	var reloaded Channel
 	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
 	assert.EqualValues(t, 0, reloaded.QuotaLimit)
+}
+
+func TestChannelUpdatePreservesCallerMultiKeyStateWhenKeyOrderUnchanged(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	testCases := []struct {
+		name                  string
+		initialStatusList     map[int]int
+		initialDisabledReason map[int]string
+		initialDisabledTime   map[int]int64
+		mutate                func(*Channel)
+		wantStatusList        map[int]int
+		wantDisabledReason    map[int]string
+		wantDisabledTime      map[int]int64
+	}{
+		{
+			name: "disable_key",
+			mutate: func(channel *Channel) {
+				if channel.ChannelInfo.MultiKeyStatusList == nil {
+					channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
+				}
+				channel.ChannelInfo.MultiKeyStatusList[1] = common.ChannelStatusManuallyDisabled
+			},
+			wantStatusList: map[int]int{1: common.ChannelStatusManuallyDisabled},
+		},
+		{
+			name:                  "enable_key",
+			initialStatusList:     map[int]int{0: common.ChannelStatusManuallyDisabled},
+			initialDisabledReason: map[int]string{0: "manual"},
+			initialDisabledTime:   map[int]int64{0: 100},
+			mutate: func(channel *Channel) {
+				delete(channel.ChannelInfo.MultiKeyStatusList, 0)
+				delete(channel.ChannelInfo.MultiKeyDisabledReason, 0)
+				delete(channel.ChannelInfo.MultiKeyDisabledTime, 0)
+			},
+		},
+		{
+			name: "disable_all_keys",
+			mutate: func(channel *Channel) {
+				channel.ChannelInfo.MultiKeyStatusList = map[int]int{
+					0: common.ChannelStatusManuallyDisabled,
+					1: common.ChannelStatusManuallyDisabled,
+				}
+			},
+			wantStatusList: map[int]int{
+				0: common.ChannelStatusManuallyDisabled,
+				1: common.ChannelStatusManuallyDisabled,
+			},
+		},
+		{
+			name:                  "enable_all_keys",
+			initialStatusList:     map[int]int{0: common.ChannelStatusManuallyDisabled, 1: common.ChannelStatusAutoDisabled},
+			initialDisabledReason: map[int]string{0: "manual", 1: "auto"},
+			initialDisabledTime:   map[int]int64{0: 111, 1: 222},
+			mutate: func(channel *Channel) {
+				channel.ChannelInfo.MultiKeyStatusList = map[int]int{}
+				channel.ChannelInfo.MultiKeyDisabledReason = map[int]string{}
+				channel.ChannelInfo.MultiKeyDisabledTime = map[int]int64{}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &Channel{
+				Name:           "update-same-keys-" + tc.name,
+				Key:            "sk-alpha\nsk-beta",
+				Status:         common.ChannelStatusEnabled,
+				QuotaLimitMode: ChannelQuotaLimitModeBoth,
+				QuotaLimit:     100,
+				Group:          "default",
+				Models:         "gpt-4o-mini",
+				ChannelInfo: ChannelInfo{
+					IsMultiKey:             true,
+					MultiKeySize:           2,
+					MultiKeyMode:           constant.MultiKeyModePolling,
+					MultiKeyStatusList:     tc.initialStatusList,
+					MultiKeyDisabledReason: tc.initialDisabledReason,
+					MultiKeyDisabledTime:   tc.initialDisabledTime,
+				},
+			}
+			require.NoError(t, channel.Insert())
+			_, err := EnsureChannelKeyUsageRecords(channel)
+			require.NoError(t, err)
+			InitChannelCache()
+
+			current, err := GetChannelById(channel.Id, true)
+			require.NoError(t, err)
+			tc.mutate(current)
+			require.NoError(t, current.Update())
+
+			var reloaded Channel
+			require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+			assert.Equal(t, tc.wantStatusList, reloaded.ChannelInfo.MultiKeyStatusList)
+			assert.Equal(t, tc.wantDisabledReason, reloaded.ChannelInfo.MultiKeyDisabledReason)
+			assert.Equal(t, tc.wantDisabledTime, reloaded.ChannelInfo.MultiKeyDisabledTime)
+
+			cached, err := CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			assert.Equal(t, reloaded.ChannelInfo.MultiKeyStatusList, cached.ChannelInfo.MultiKeyStatusList)
+			assert.Equal(t, reloaded.ChannelInfo.MultiKeyDisabledReason, cached.ChannelInfo.MultiKeyDisabledReason)
+			assert.Equal(t, reloaded.ChannelInfo.MultiKeyDisabledTime, cached.ChannelInfo.MultiKeyDisabledTime)
+		})
+	}
 }
 
 func TestApplyChannelUsageTracksUsedQuotaForNonQuotaModes(t *testing.T) {
@@ -1047,6 +1161,118 @@ func TestEnsureChannelKeyUsageRecordsDropsDeletedKeyFromStatusMapButKeepsHistory
 	assert.Equal(t, 0, selectedIndex)
 }
 
+func TestChannelUpdateRollsBackWhenEnsureReconcileFails(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "rollback-before",
+		Key:            "sk-alpha",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+			MultiKeyMode: constant.MultiKeyModePolling,
+		},
+	}
+	require.NoError(t, channel.Insert())
+	_, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+
+	callbackName := "test:fail_channel_key_usage_create"
+	require.NoError(t, DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Table == (&ChannelKeyUsage{}).TableName() {
+			tx.AddError(errors.New("injected reconcile failure"))
+		}
+	}))
+	t.Cleanup(func() {
+		_ = DB.Callback().Create().Remove(callbackName)
+	})
+
+	current, err := GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	current.Name = "rollback-after"
+	current.Key = "sk-alpha\nsk-beta"
+	current.ChannelInfo.MultiKeySize = 2
+
+	err = current.Update()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "injected reconcile failure")
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, "rollback-before", reloaded.Name)
+	assert.Equal(t, "sk-alpha", reloaded.Key)
+	assert.Equal(t, 1, reloaded.ChannelInfo.MultiKeySize)
+
+	var usages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&usages).Error)
+	require.Len(t, usages, 1)
+}
+
+func TestEnsureChannelKeyUsageRecordsConcurrentCreatesConvergeWithoutUniqueConflicts(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "ensure-concurrent",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+		},
+	}
+	require.NoError(t, channel.Insert())
+
+	const goroutineCount = 8
+	results := make(chan map[int]*ChannelKeyUsage, goroutineCount)
+	errorsCh := make(chan error, goroutineCount)
+	start := make(chan struct{})
+
+	var waitGroup sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := ensureChannelKeyUsageRecordsWithRetry(channel)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, results, goroutineCount)
+	for result := range results {
+		require.Len(t, result, 2)
+	}
+
+	var usages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&usages).Error)
+	require.Len(t, usages, 2)
+}
+
 func TestApplyChannelKeyUsageOnlyAccumulatesForKeyModes(t *testing.T) {
 	prepareChannelUsageTable(t)
 	configureChannelUsageSecret(t)
@@ -1699,6 +1925,23 @@ func applyChannelKeyUsageWithRetry(channel *Channel, selectedKey string, keyInde
 
 	for attempt := 0; attempt < 5; attempt++ {
 		result, err = ApplyChannelKeyUsage(channel, selectedKey, keyIndex, quota)
+		if err == nil || !isSQLiteBusyError(err) {
+			return result, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+
+	return result, err
+}
+
+func ensureChannelKeyUsageRecordsWithRetry(channel *Channel) (map[int]*ChannelKeyUsage, error) {
+	var (
+		result map[int]*ChannelKeyUsage
+		err    error
+	)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		result, err = EnsureChannelKeyUsageRecords(channel)
 		if err == nil || !isSQLiteBusyError(err) {
 			return result, err
 		}
