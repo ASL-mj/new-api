@@ -526,6 +526,7 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	channel.QuotaLimitMode = NormalizeQuotaLimitMode(channel.QuotaLimitMode)
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -566,6 +567,17 @@ func (channel *Channel) Update() error {
 	}
 	var err error
 	err = DB.Model(channel).Updates(channel).Error
+	if err != nil {
+		return err
+	}
+	err = DB.Model(channel).
+		Select("quota_limit_mode", "quota_limit", "quota_limit_used", "quota_limit_reset_at").
+		Updates(map[string]interface{}{
+			"quota_limit_mode":     channel.QuotaLimitMode,
+			"quota_limit":          channel.QuotaLimit,
+			"quota_limit_used":     channel.QuotaLimitUsed,
+			"quota_limit_reset_at": channel.QuotaLimitResetAt,
+		}).Error
 	if err != nil {
 		return err
 	}

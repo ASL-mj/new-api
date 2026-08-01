@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -10,8 +11,11 @@ import (
 	"gorm.io/gorm"
 )
 
+var channelUsageTestDBMutex sync.Mutex
+
 func prepareChannelUsageTable(t *testing.T) {
 	t.Helper()
+	channelUsageTestDBMutex.Lock()
 
 	previousDB := DB
 	previousUsingSQLite := common.UsingSQLite
@@ -30,7 +34,7 @@ func prepareChannelUsageTable(t *testing.T) {
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
 
-	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}))
+	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}))
 
 	t.Cleanup(func() {
 		DB = previousDB
@@ -38,6 +42,7 @@ func prepareChannelUsageTable(t *testing.T) {
 		common.UsingMySQL = previousUsingMySQL
 		common.UsingPostgreSQL = previousUsingPostgreSQL
 		_ = sqlDB.Close()
+		channelUsageTestDBMutex.Unlock()
 	})
 }
 
@@ -132,4 +137,26 @@ func TestResetQuotaLimitUsageOnlyClearsUsageAndUpdatesResetTime(t *testing.T) {
 	assert.EqualValues(t, 500, reloaded.QuotaLimit)
 	assert.EqualValues(t, 0, reloaded.QuotaLimitUsed)
 	assert.EqualValues(t, resetAt, reloaded.QuotaLimitResetAt)
+}
+
+func TestChannelUpdatePersistsZeroQuotaLimit(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "quota-update-test",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: "channel",
+		QuotaLimit:     500,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, channel.Insert())
+
+	channel.QuotaLimit = 0
+	require.NoError(t, channel.Update())
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 0, reloaded.QuotaLimit)
 }
