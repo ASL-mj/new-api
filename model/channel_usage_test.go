@@ -151,6 +151,58 @@ func setChannelUsageTimezoneOptionForTest(t *testing.T, timezone string, present
 	})
 }
 
+func TestUpdateOptionRejectsInvalidChannelUsageTimezoneWithoutPersisting(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	require.NoError(t, UpdateOption("ChannelUsageTimezone", "Asia/Shanghai"))
+	resetChannelUsageTimezoneCache()
+
+	err := UpdateOption("ChannelUsageTimezone", " Invalid/Timezone ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid ChannelUsageTimezone")
+
+	var stored Option
+	require.NoError(t, DB.Where("key = ?", "ChannelUsageTimezone").First(&stored).Error)
+	assert.Equal(t, "Asia/Shanghai", stored.Value)
+
+	common.OptionMapRWMutex.RLock()
+	assert.Equal(t, "Asia/Shanghai", common.OptionMap["ChannelUsageTimezone"])
+	common.OptionMapRWMutex.RUnlock()
+	assert.Equal(t, "Asia/Shanghai", common.ChannelUsageTimezone)
+}
+
+func TestLoadOptionsFromDatabaseSkipsInvalidChannelUsageTimezone(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	require.NoError(t, UpdateOption("ChannelUsageTimezone", "Asia/Shanghai"))
+	resetChannelUsageTimezoneCache()
+
+	require.NoError(t, DB.Model(&Option{}).
+		Where("key = ?", "ChannelUsageTimezone").
+		Update("value", "Invalid/Timezone").Error)
+
+	err := loadOptionsFromDatabase()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ChannelUsageTimezone")
+
+	common.OptionMapRWMutex.RLock()
+	assert.Equal(t, "Asia/Shanghai", common.OptionMap["ChannelUsageTimezone"])
+	common.OptionMapRWMutex.RUnlock()
+	assert.Equal(t, "Asia/Shanghai", common.ChannelUsageTimezone)
+}
+
+func TestLoadOptionsFromDatabaseReturnsAllOptionError(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	err = loadOptionsFromDatabase()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query options")
+}
+
 func prepareChannelUsageMigrationDB(t *testing.T) {
 	t.Helper()
 	modelTestDBMutex.Lock()
@@ -2402,6 +2454,71 @@ func TestGetChannelUsageStatsBatchZeroFillsAndUses30DaySummaryRange(t *testing.T
 	assert.False(t, hasNegative)
 }
 
+func TestGetChannelUsageStatsBatchChunksAndZeroFillsMoreThanTwoHundredIDs(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	ids := make([]int, 0, 205)
+	channels := make([]*Channel, 0, 205)
+	for i := 0; i < 205; i++ {
+		channelID := 3000 + i
+		ids = append(ids, channelID)
+		channels = append(channels, &Channel{
+			Id:             channelID,
+			Name:           fmt.Sprintf("channel-%d", channelID),
+			Key:            fmt.Sprintf("sk-%d", channelID),
+			Status:         common.ChannelStatusEnabled,
+			Group:          "default",
+			Models:         "gpt-4o-mini",
+			QuotaLimit:     int64(100 + i),
+			QuotaLimitUsed: int64(i),
+			Balance:        float64(i) / 10,
+		})
+	}
+	require.NoError(t, DB.Create(channels).Error)
+	require.NoError(t, DB.Create([]*ChannelUsageDaily{
+		{ChannelId: ids[0], KeyFingerprint: "", UsageDate: "2026-08-01", Quota: 10, TokenUsed: 100, RequestCount: 1, UpdatedAt: 1},
+		{ChannelId: ids[0], KeyFingerprint: "", UsageDate: "2026-07-25", Quota: 20, TokenUsed: 200, RequestCount: 2, UpdatedAt: 1},
+		{ChannelId: ids[204], KeyFingerprint: "", UsageDate: "2026-08-01", Quota: 30, TokenUsed: 300, RequestCount: 3, UpdatedAt: 1},
+		{ChannelId: ids[204], KeyFingerprint: "", UsageDate: "2026-07-15", Quota: 40, TokenUsed: 400, RequestCount: 4, UpdatedAt: 1},
+		{ChannelId: ids[10], KeyFingerprint: "fp-ignore", UsageDate: "2026-08-01", Quota: 99, TokenUsed: 999, RequestCount: 9, UpdatedAt: 1},
+	}).Error)
+
+	requestIDs := append([]int{}, ids...)
+	requestIDs = append(requestIDs, ids[0], ids[204], 999999)
+
+	stats, err := GetChannelUsageStatsBatch(requestIDs, "2026-08-01", "2026-07-03")
+	require.NoError(t, err)
+	require.Len(t, stats, 206)
+
+	first := stats[ids[0]]
+	assert.EqualValues(t, 10, first.TodayQuota)
+	assert.EqualValues(t, 100, first.TodayTokenUsed)
+	assert.EqualValues(t, 1, first.TodayRequestCount)
+	assert.EqualValues(t, 30, first.Last30dQuota)
+	assert.EqualValues(t, 300, first.Last30dTokenUsed)
+	assert.EqualValues(t, 3, first.Last30dRequestCount)
+
+	last := stats[ids[204]]
+	assert.EqualValues(t, 30, last.TodayQuota)
+	assert.EqualValues(t, 300, last.TodayTokenUsed)
+	assert.EqualValues(t, 3, last.TodayRequestCount)
+	assert.EqualValues(t, 70, last.Last30dQuota)
+	assert.EqualValues(t, 700, last.Last30dTokenUsed)
+	assert.EqualValues(t, 7, last.Last30dRequestCount)
+
+	middle := stats[ids[100]]
+	assert.Equal(t, ids[100], middle.ChannelID)
+	assert.Zero(t, middle.TodayQuota)
+	assert.Zero(t, middle.Last30dQuota)
+	assert.EqualValues(t, 100, middle.QuotaLimitUsed)
+
+	unknown := stats[999999]
+	assert.Equal(t, 999999, unknown.ChannelID)
+	assert.Zero(t, unknown.TodayQuota)
+	assert.Zero(t, unknown.Last30dQuota)
+	assert.Zero(t, unknown.QuotaLimit)
+}
+
 func TestChannelUsageDailyDryRunSQLAcrossDialectors(t *testing.T) {
 	prepareChannelUsageTable(t)
 
@@ -2488,6 +2605,72 @@ func TestChannelUsageDailyDryRunSQLAcrossDialectors(t *testing.T) {
 				t,
 				strings.Contains(createSQLUpper, "ON CONFLICT") || strings.Contains(createSQLUpper, "ON DUPLICATE KEY"),
 			)
+		})
+	}
+}
+
+func TestChannelUsageStatsAggregateDryRunSQLAcrossDialectors(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		open        func(*sql.DB) (*gorm.DB, error)
+		wantQuote   string
+		wantBindVar string
+	}{
+		{
+			name: "sqlite",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(sqlite.Dialector{Conn: conn}, &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_usage_daily`",
+			wantBindVar: "?",
+		},
+		{
+			name: "mysql",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(mysql.New(mysql.Config{
+					Conn:                      conn,
+					SkipInitializeWithVersion: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_usage_daily`",
+			wantBindVar: "?",
+		},
+		{
+			name: "postgres",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{
+					Conn:             conn,
+					WithoutReturning: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "\"channel_usage_daily\"",
+			wantBindVar: "$",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dryRunDB, err := tc.open(sqlDB)
+			require.NoError(t, err)
+
+			var aggregates []channelUsageDailyAggregate
+			stmt := buildChannelUsageStatsAggregateQuery(dryRunDB, []int{1, 2, 3}, "2026-08-01", "2026-07-03").
+				Find(&aggregates).Statement
+			querySQL := stmt.SQL.String()
+			querySQLUpper := strings.ToUpper(querySQL)
+
+			assert.Contains(t, querySQL, tc.wantQuote)
+			assert.Contains(t, querySQLUpper, "SELECT")
+			assert.Contains(t, querySQLUpper, "SUM(CASE WHEN USAGE_DATE")
+			assert.Contains(t, querySQLUpper, "GROUP BY")
+			assert.Contains(t, querySQLUpper, "KEY_FINGERPRINT")
+			assert.Contains(t, querySQL, tc.wantBindVar)
+			assert.NotEmpty(t, stmt.Vars)
 		})
 	}
 }

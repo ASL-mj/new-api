@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,36 @@ import (
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
+}
+
+func validateOptionValue(key string, value string) (string, error) {
+	switch key {
+	case "ChannelUsageTimezone":
+		timezone := strings.TrimSpace(value)
+		if timezone == "" {
+			return "", fmt.Errorf("ChannelUsageTimezone cannot be empty")
+		}
+		if _, err := time.LoadLocation(timezone); err != nil {
+			return "", fmt.Errorf("invalid ChannelUsageTimezone %q: %w", timezone, err)
+		}
+		return timezone, nil
+	default:
+		return value, nil
+	}
+}
+
+func initialChannelUsageTimezoneValue() string {
+	timezone := strings.TrimSpace(os.Getenv("CHANNEL_USAGE_TIMEZONE"))
+	if timezone == "" {
+		timezone = strings.TrimSpace(common.ChannelUsageTimezone)
+	}
+	validatedTimezone, err := validateOptionValue("ChannelUsageTimezone", timezone)
+	if err == nil {
+		return validatedTimezone
+	}
+
+	common.SysLog("invalid CHANNEL_USAGE_TIMEZONE, falling back to default: " + err.Error())
+	return "Asia/Shanghai"
 }
 
 func AllOption() ([]*Option, error) {
@@ -160,10 +191,7 @@ func InitOptionMap() {
 	common.OptionMap["RetryTimes"] = strconv.Itoa(common.RetryTimes)
 	common.OptionMap["DataExportInterval"] = strconv.Itoa(common.DataExportInterval)
 	common.OptionMap["DataExportDefaultTime"] = common.DataExportDefaultTime
-	channelUsageTimezone := strings.TrimSpace(os.Getenv("CHANNEL_USAGE_TIMEZONE"))
-	if channelUsageTimezone == "" {
-		channelUsageTimezone = common.ChannelUsageTimezone
-	}
+	channelUsageTimezone := initialChannelUsageTimezoneValue()
 	common.OptionMap["ChannelUsageTimezone"] = channelUsageTimezone
 	common.ChannelUsageTimezone = channelUsageTimezone
 	common.OptionMap["DefaultCollapseSidebar"] = strconv.FormatBool(common.DefaultCollapseSidebar)
@@ -192,56 +220,86 @@ func InitOptionMap() {
 	}
 
 	common.OptionMapRWMutex.Unlock()
-	loadOptionsFromDatabase()
+	if err := loadOptionsFromDatabase(); err != nil {
+		common.SysLog("failed to load options from database: " + err.Error())
+	}
 }
 
-func loadOptionsFromDatabase() {
-	options, _ := AllOption()
+func loadOptionsFromDatabase() error {
+	options, err := AllOption()
+	if err != nil {
+		return fmt.Errorf("query options: %w", err)
+	}
+
+	var loadErrors []string
 	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
-		if err != nil {
-			common.SysLog("failed to update option map: " + err.Error())
+		if err := updateOptionMap(option.Key, option.Value); err != nil {
+			common.SysLog(fmt.Sprintf("failed to update option map for %s: %v", option.Key, err))
+			loadErrors = append(loadErrors, fmt.Sprintf("%s: %v", option.Key, err))
 		}
 	}
+	if len(loadErrors) > 0 {
+		return fmt.Errorf("load options with skipped invalid values: %s", strings.Join(loadErrors, "; "))
+	}
+	return nil
 }
 
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		common.SysLog("syncing options from database")
-		loadOptionsFromDatabase()
+		if err := loadOptionsFromDatabase(); err != nil {
+			common.SysLog("failed to sync options from database: " + err.Error())
+		}
 	}
 }
 
 func UpdateOption(key string, value string) error {
+	validatedValue, err := validateOptionValue(key, value)
+	if err != nil {
+		return err
+	}
+
 	// Save to database first
 	option := Option{
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
+	option.Value = validatedValue
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
-	return updateOptionMap(key, value)
+	return updateOptionMap(key, validatedValue)
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	validatedValue, err := validateOptionValue(key, value)
+	if err != nil {
+		return err
+	}
+
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
-	common.OptionMap[key] = value
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap[key] = validatedValue
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
-	if handleConfigUpdate(key, value) {
+	if handleConfigUpdate(key, validatedValue) {
 		return nil // 已由配置系统处理
 	}
 
 	// 处理传统配置项...
 	if strings.HasSuffix(key, "Permission") {
-		intValue, _ := strconv.Atoi(value)
+		intValue, _ := strconv.Atoi(validatedValue)
 		switch key {
 		case "FileUploadPermission":
 			common.FileUploadPermission = intValue
@@ -254,7 +312,7 @@ func updateOptionMap(key string, value string) (err error) {
 		}
 	}
 	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" {
-		boolValue := value == "true"
+		boolValue := validatedValue == "true"
 		switch key {
 		case "PasswordRegisterEnabled":
 			common.PasswordRegisterEnabled = boolValue
@@ -507,7 +565,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "DataExportDefaultTime":
 		common.DataExportDefaultTime = value
 	case "ChannelUsageTimezone":
-		common.ChannelUsageTimezone = value
+		common.ChannelUsageTimezone = validatedValue
 	case "ModelRatio":
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":

@@ -240,22 +240,7 @@ func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) 
 		}
 
 		var aggregates []channelUsageDailyAggregate
-		if err := DB.Model(&ChannelUsageDaily{}).
-			Select(
-				"channel_id, "+
-					"SUM(CASE WHEN usage_date = ? THEN quota ELSE 0 END) AS today_quota, "+
-					"SUM(CASE WHEN usage_date = ? THEN token_used ELSE 0 END) AS today_token_used, "+
-					"SUM(CASE WHEN usage_date = ? THEN request_count ELSE 0 END) AS today_request_count, "+
-					"SUM(quota) AS last30d_quota, "+
-					"SUM(token_used) AS last30d_token_used, "+
-					"SUM(request_count) AS last30d_request_count",
-				today,
-				today,
-				today,
-			).
-			Where("channel_id IN ? AND key_fingerprint = ? AND usage_date >= ? AND usage_date <= ?", chunk, "", start30d, today).
-			Group("channel_id").
-			Find(&aggregates).Error; err != nil {
+		if err := buildChannelUsageStatsAggregateQuery(DB, chunk, today, start30d).Find(&aggregates).Error; err != nil {
 			return nil, err
 		}
 		for _, aggregate := range aggregates {
@@ -804,6 +789,24 @@ func chunkChannelUsageStatsIDs(channelIDs []int, chunkSize int) [][]int {
 		chunks = append(chunks, channelIDs[start:end])
 	}
 	return chunks
+}
+
+func buildChannelUsageStatsAggregateQuery(db *gorm.DB, channelIDs []int, today string, start30d string) *gorm.DB {
+	return db.Model(&ChannelUsageDaily{}).
+		Select(
+			"channel_id, "+
+				"SUM(CASE WHEN usage_date = ? THEN quota ELSE 0 END) AS today_quota, "+
+				"SUM(CASE WHEN usage_date = ? THEN token_used ELSE 0 END) AS today_token_used, "+
+				"SUM(CASE WHEN usage_date = ? THEN request_count ELSE 0 END) AS today_request_count, "+
+				"SUM(quota) AS last30d_quota, "+
+				"SUM(token_used) AS last30d_token_used, "+
+				"SUM(request_count) AS last30d_request_count",
+			today,
+			today,
+			today,
+		).
+		Where("channel_id IN ? AND key_fingerprint = ? AND usage_date >= ? AND usage_date <= ?", channelIDs, "", start30d, today).
+		Group("channel_id")
 }
 
 func getChannelKeyFingerprintSecret() (string, error) {
