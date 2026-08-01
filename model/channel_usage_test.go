@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +40,7 @@ func prepareChannelUsageTable(t *testing.T) {
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
 
-	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}, &Option{}, &ChannelKeyUsage{}, &ChannelUsageDaily{}))
 
 	t.Cleanup(func() {
 		DB = previousDB
@@ -77,7 +78,7 @@ func prepareConcurrentChannelUsageTable(t *testing.T) {
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
 
-	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, isolatedDB.AutoMigrate(&Channel{}, &Ability{}, &Option{}, &ChannelKeyUsage{}, &ChannelUsageDaily{}))
 
 	t.Cleanup(func() {
 		DB = previousDB
@@ -150,6 +151,18 @@ func prepareChannelUsageSecretDB(t *testing.T) {
 	t.Helper()
 	prepareChannelUsageMigrationDB(t)
 	require.NoError(t, DB.AutoMigrate(&Option{}))
+}
+
+func configureChannelUsageSecret(t *testing.T) {
+	t.Helper()
+	t.Setenv("CRYPTO_SECRET", "channel-usage-secret")
+	previousSecret := common.CryptoSecret
+	common.CryptoSecret = "channel-usage-secret"
+	resetChannelKeyFingerprintSecretCache()
+	t.Cleanup(func() {
+		common.CryptoSecret = previousSecret
+		resetChannelKeyFingerprintSecretCache()
+	})
 }
 
 func TestNormalizeQuotaLimitMode(t *testing.T) {
@@ -754,6 +767,743 @@ func TestChannelUsageDryRunSQLAcrossDialectors(t *testing.T) {
 	}
 }
 
+func TestEnsureChannelKeyUsageRecordsReconcilesByFingerprintWithoutResettingExistingUsage(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "key-usage-reconcile",
+		Key:            "sk-alpha\nsk-beta\nsk-gamma",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 3,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	alphaFingerprint, err := FingerprintChannelKey("sk-alpha")
+	require.NoError(t, err)
+	betaFingerprint, err := FingerprintChannelKey("sk-beta")
+	require.NoError(t, err)
+	orphanFingerprint, err := FingerprintChannelKey("sk-orphan")
+	require.NoError(t, err)
+
+	require.NoError(t, DB.Create([]*ChannelKeyUsage{
+		{
+			ChannelId:         channel.Id,
+			KeyFingerprint:    alphaFingerprint,
+			KeyIndex:          0,
+			KeyMask:           MaskChannelKey("sk-alpha"),
+			QuotaLimit:        123,
+			QuotaLimitUsed:    95,
+			QuotaLimitResetAt: 111,
+			Status:            common.ChannelStatusAutoDisabled,
+			DisabledReason:    "already exhausted",
+			DisabledAt:        222,
+		},
+		{
+			ChannelId:         channel.Id,
+			KeyFingerprint:    betaFingerprint,
+			KeyIndex:          1,
+			KeyMask:           MaskChannelKey("sk-beta"),
+			QuotaLimit:        77,
+			QuotaLimitUsed:    40,
+			QuotaLimitResetAt: 333,
+			Status:            common.ChannelStatusEnabled,
+		},
+		{
+			ChannelId:         channel.Id,
+			KeyFingerprint:    orphanFingerprint,
+			KeyIndex:          2,
+			KeyMask:           MaskChannelKey("sk-orphan"),
+			QuotaLimit:        66,
+			QuotaLimitUsed:    55,
+			QuotaLimitResetAt: 444,
+			Status:            common.ChannelStatusAutoDisabled,
+			DisabledReason:    "legacy",
+			DisabledAt:        555,
+		},
+	}).Error)
+
+	channel.Key = "sk-gamma\nsk-alpha\nsk-beta"
+	channel.ChannelInfo.MultiKeySize = 3
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.Len(t, currentUsages, 3)
+
+	var records []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&records).Error)
+	require.Len(t, records, 4)
+
+	recordsByFingerprint := make(map[string]ChannelKeyUsage, len(records))
+	for _, record := range records {
+		recordsByFingerprint[record.KeyFingerprint] = record
+	}
+
+	alphaRecord := recordsByFingerprint[alphaFingerprint]
+	assert.Equal(t, 1, alphaRecord.KeyIndex)
+	assert.Equal(t, MaskChannelKey("sk-alpha"), alphaRecord.KeyMask)
+	assert.EqualValues(t, 123, alphaRecord.QuotaLimit)
+	assert.EqualValues(t, 95, alphaRecord.QuotaLimitUsed)
+	assert.EqualValues(t, 111, alphaRecord.QuotaLimitResetAt)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, alphaRecord.Status)
+	assert.Equal(t, "already exhausted", alphaRecord.DisabledReason)
+	assert.EqualValues(t, 222, alphaRecord.DisabledAt)
+
+	betaRecord := recordsByFingerprint[betaFingerprint]
+	assert.Equal(t, 2, betaRecord.KeyIndex)
+	assert.EqualValues(t, 77, betaRecord.QuotaLimit)
+	assert.EqualValues(t, 40, betaRecord.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, betaRecord.Status)
+
+	gammaFingerprint, err := FingerprintChannelKey("sk-gamma")
+	require.NoError(t, err)
+	gammaRecord := recordsByFingerprint[gammaFingerprint]
+	assert.Equal(t, 0, gammaRecord.KeyIndex)
+	assert.Equal(t, MaskChannelKey("sk-gamma"), gammaRecord.KeyMask)
+	assert.EqualValues(t, channel.QuotaLimit, gammaRecord.QuotaLimit)
+	assert.EqualValues(t, 0, gammaRecord.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, gammaRecord.Status)
+
+	orphanRecord := recordsByFingerprint[orphanFingerprint]
+	assert.EqualValues(t, 55, orphanRecord.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, orphanRecord.Status)
+}
+
+func TestApplyChannelKeyUsageOnlyAccumulatesForKeyModes(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	testCases := []struct {
+		name     string
+		mode     string
+		expected int64
+	}{
+		{name: "none", mode: ChannelQuotaLimitModeNone, expected: 3},
+		{name: "channel", mode: ChannelQuotaLimitModeChannel, expected: 3},
+		{name: "key", mode: ChannelQuotaLimitModeKey, expected: 10},
+		{name: "both", mode: ChannelQuotaLimitModeBoth, expected: 10},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &Channel{
+				Name:           "key-usage-" + tc.name,
+				Key:            "sk-" + tc.name,
+				Status:         common.ChannelStatusEnabled,
+				QuotaLimitMode: tc.mode,
+				QuotaLimit:     100,
+				Group:          "default",
+				Models:         "gpt-4o-mini",
+				ChannelInfo: ChannelInfo{
+					IsMultiKey:   true,
+					MultiKeySize: 1,
+					MultiKeyMode: constant.MultiKeyModeRandom,
+				},
+			}
+			require.NoError(t, DB.Create(channel).Error)
+
+			currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+			require.NoError(t, err)
+			usage := currentUsages[0]
+			require.NotNil(t, usage)
+			require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+				Where("id = ?", usage.Id).
+				Updates(map[string]interface{}{
+					"quota_limit":      100,
+					"quota_limit_used": 3,
+					"status":           common.ChannelStatusEnabled,
+				}).Error)
+
+			result, err := ApplyChannelKeyUsage(channel, "sk-"+tc.name, 0, 7)
+			require.NoError(t, err)
+			assert.EqualValues(t, tc.expected, result.QuotaLimitUsed)
+			assert.Equal(t, common.ChannelStatusEnabled, result.Status)
+			assert.False(t, result.KeyJustExhausted)
+
+			var reloaded ChannelKeyUsage
+			require.NoError(t, DB.First(&reloaded, usage.Id).Error)
+			assert.EqualValues(t, tc.expected, reloaded.QuotaLimitUsed)
+			assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+		})
+	}
+}
+
+func TestApplyChannelKeyUsageReturnsFreshStateForNonPositiveQuota(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "key-usage-no-op",
+		Key:            "sk-no-op",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     50,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	usage := currentUsages[0]
+	require.NotNil(t, usage)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", usage.Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      50,
+			"quota_limit_used": 3,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	zeroResult, err := ApplyChannelKeyUsage(channel, "sk-no-op", 0, 0)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, zeroResult.QuotaLimitUsed)
+	assert.EqualValues(t, 50, zeroResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, zeroResult.Status)
+	assert.False(t, zeroResult.KeyJustExhausted)
+
+	negativeResult, err := ApplyChannelKeyUsage(channel, "sk-no-op", 0, -5)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, negativeResult.QuotaLimitUsed)
+	assert.EqualValues(t, 50, negativeResult.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, negativeResult.Status)
+	assert.False(t, negativeResult.KeyJustExhausted)
+
+	var reloaded ChannelKeyUsage
+	require.NoError(t, DB.First(&reloaded, usage.Id).Error)
+	assert.EqualValues(t, 3, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+}
+
+func TestApplyChannelKeyUsageDisablesOnlyExceededKeyAndKeepsSiblingsAvailable(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	channel := &Channel{
+		Name:           "key-usage-single-exhaustion",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 90,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[1].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 0,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	InitChannelCache()
+	cachedChannel, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+
+	result, err := ApplyChannelKeyUsage(cachedChannel, "sk-alpha", 0, 15)
+	require.NoError(t, err)
+	assert.EqualValues(t, 105, result.QuotaLimitUsed)
+	assert.EqualValues(t, 100, result.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, result.Status)
+	assert.False(t, result.ChannelJustExhausted)
+	assert.True(t, result.KeyJustExhausted)
+
+	var alphaUsage ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ? AND key_index = ?", channel.Id, 0).First(&alphaUsage).Error)
+	assert.EqualValues(t, 105, alphaUsage.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, alphaUsage.Status)
+
+	var betaUsage ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ? AND key_index = ?", channel.Id, 1).First(&betaUsage).Error)
+	assert.EqualValues(t, 0, betaUsage.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, betaUsage.Status)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.ChannelInfo.MultiKeyStatusList[0])
+	assert.NotEmpty(t, reloaded.ChannelInfo.MultiKeyDisabledReason[0])
+	assert.NotZero(t, reloaded.ChannelInfo.MultiKeyDisabledTime[0])
+
+	cachedAfter, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusEnabled, cachedAfter.Status)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, cachedAfter.ChannelInfo.MultiKeyStatusList[0])
+
+	selectedKey, selectedIndex, apiErr := cachedAfter.GetNextEnabledKey()
+	require.Nil(t, apiErr)
+	assert.Equal(t, "sk-beta", selectedKey)
+	assert.Equal(t, 1, selectedIndex)
+
+	selectedChannel, err := GetRandomSatisfiedChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	require.NotNil(t, selectedChannel)
+	assert.Equal(t, channel.Id, selectedChannel.Id)
+}
+
+func TestApplyChannelKeyUsageDisablesParentChannelWhenLastKeyIsExhausted(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	channel := &Channel{
+		Name:           "key-usage-last-key",
+		Key:            "sk-last",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 95,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	InitChannelCache()
+	cachedChannel, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+
+	result, err := ApplyChannelKeyUsage(cachedChannel, "sk-last", 0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 105, result.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, result.Status)
+	assert.True(t, result.ChannelJustExhausted)
+	assert.True(t, result.KeyJustExhausted)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.ChannelInfo.MultiKeyStatusList[0])
+	assert.NotEmpty(t, reloaded.ChannelInfo.MultiKeyDisabledReason[0])
+	assert.NotZero(t, reloaded.ChannelInfo.MultiKeyDisabledTime[0])
+	assert.Contains(t, reloaded.OtherInfo, "All keys are disabled")
+
+	cachedAfter, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, cachedAfter.Status)
+
+	var abilities []Ability
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
+	require.NotEmpty(t, abilities)
+	for _, ability := range abilities {
+		assert.False(t, ability.Enabled)
+	}
+
+	selectedChannel, err := GetRandomSatisfiedChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	assert.Nil(t, selectedChannel)
+}
+
+func TestApplyChannelKeyUsageConcurrentRequestsDoNotLoseUsage(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "key-usage-concurrent",
+		Key:            "sk-concurrent",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      1000,
+			"quota_limit_used": 0,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	const goroutineCount = 10
+	const quotaPerRequest = 11
+
+	results := make(chan ChannelKeyUsageApplyResult, goroutineCount)
+	errorsCh := make(chan error, goroutineCount)
+	start := make(chan struct{})
+
+	var waitGroup sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := applyChannelKeyUsageWithRetry(channel, "sk-concurrent", 0, quotaPerRequest)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, results, goroutineCount)
+	exhaustedCount := 0
+	for result := range results {
+		if result.KeyJustExhausted {
+			exhaustedCount++
+		}
+	}
+	assert.Zero(t, exhaustedCount)
+
+	var reloaded ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ? AND key_index = ?", channel.Id, 0).First(&reloaded).Error)
+	assert.EqualValues(t, goroutineCount*quotaPerRequest, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+}
+
+func TestApplyChannelKeyUsageConcurrentExhaustionHasSingleWinner(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "key-usage-concurrent-exhaustion",
+		Key:            "sk-concurrent-exhaustion",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 90,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	const goroutineCount = 2
+	const quotaPerRequest = 15
+
+	results := make(chan ChannelKeyUsageApplyResult, goroutineCount)
+	errorsCh := make(chan error, goroutineCount)
+	start := make(chan struct{})
+
+	var waitGroup sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := applyChannelKeyUsageWithRetry(channel, "sk-concurrent-exhaustion", 0, quotaPerRequest)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, results, goroutineCount)
+	exhaustedCount := 0
+	channelExhaustedCount := 0
+	for result := range results {
+		if result.KeyJustExhausted {
+			exhaustedCount++
+		}
+		if result.ChannelJustExhausted {
+			channelExhaustedCount++
+		}
+	}
+	assert.Equal(t, 1, exhaustedCount)
+	assert.Equal(t, 1, channelExhaustedCount)
+
+	var reloadedUsage ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ? AND key_index = ?", channel.Id, 0).First(&reloadedUsage).Error)
+	assert.EqualValues(t, 120, reloadedUsage.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloadedUsage.Status)
+
+	var reloadedChannel Channel
+	require.NoError(t, DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloadedChannel.Status)
+}
+
+func TestGetNextEnabledKeySkipsPersistedExceededKeysEvenWhenStatusMapIsStale(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "key-selection-skip-exhausted",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModePolling,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusEnabled,
+				1: common.ChannelStatusEnabled,
+			},
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 100,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", currentUsages[1].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 0,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	selectedKey, selectedIndex, apiErr := channel.GetNextEnabledKey()
+	require.Nil(t, apiErr)
+	assert.Equal(t, "sk-beta", selectedKey)
+	assert.Equal(t, 1, selectedIndex)
+}
+
+func TestGetNextEnabledKeyFailsClosedWhenFingerprintingFails(t *testing.T) {
+	t.Setenv("CRYPTO_SECRET", "")
+	previousSecret := common.CryptoSecret
+	previousDB := DB
+	common.CryptoSecret = ""
+	DB = nil
+	resetChannelKeyFingerprintSecretCache()
+	t.Cleanup(func() {
+		common.CryptoSecret = previousSecret
+		DB = previousDB
+		resetChannelKeyFingerprintSecretCache()
+	})
+
+	channel := &Channel{
+		Key: "sk-alpha\nsk-beta",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyMode: constant.MultiKeyModeRandom,
+		},
+	}
+
+	selectedKey, selectedIndex, apiErr := channel.GetNextEnabledKey()
+	require.NotNil(t, apiErr)
+	assert.Empty(t, selectedKey)
+	assert.Zero(t, selectedIndex)
+}
+
+func TestChannelKeyUsageSQLHelpersAreDialectNeutral(t *testing.T) {
+	incrementSQL, incrementArgs := buildChannelKeyUsageQuotaLimitIncrementExpr(7)
+	disableSQL, disableArgs := buildChannelKeyUsageAutoDisableCondition(123, "fingerprint")
+
+	testCases := []struct {
+		name string
+		sql  string
+	}{
+		{name: "increment", sql: incrementSQL},
+		{name: "disable", sql: disableSQL},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			upperSQL := strings.ToUpper(tc.sql)
+			assert.NotContains(t, upperSQL, "RETURNING")
+			assert.NotContains(t, upperSQL, "JSONB")
+			assert.NotContains(t, tc.sql, "`")
+			assert.NotContains(t, tc.sql, "\"")
+			assert.NotContains(t, tc.sql, "::")
+		})
+	}
+
+	assert.Contains(t, incrementSQL, "CASE WHEN")
+	assert.Contains(t, incrementSQL, "quota_limit > 0")
+	assert.Equal(t, []interface{}{7}, incrementArgs)
+
+	assert.Contains(t, disableSQL, "status = ?")
+	assert.Contains(t, disableSQL, "quota_limit_used >= quota_limit")
+	require.Len(t, disableArgs, 3)
+	assert.Equal(t, 123, disableArgs[0])
+	assert.Equal(t, "fingerprint", disableArgs[1])
+	assert.Equal(t, common.ChannelStatusEnabled, disableArgs[2])
+}
+
+func TestChannelKeyUsageDryRunSQLAcrossDialectors(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		open        func(*sql.DB) (*gorm.DB, error)
+		wantQuote   string
+		wantBindVar string
+	}{
+		{
+			name: "sqlite",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(sqlite.Dialector{Conn: conn}, &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_key_usages`",
+			wantBindVar: "?",
+		},
+		{
+			name: "mysql",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(mysql.New(mysql.Config{
+					Conn:                      conn,
+					SkipInitializeWithVersion: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_key_usages`",
+			wantBindVar: "?",
+		},
+		{
+			name: "postgres",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{
+					Conn:             conn,
+					WithoutReturning: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "\"channel_key_usages\"",
+			wantBindVar: "$",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dryRunDB, err := tc.open(sqlDB)
+			require.NoError(t, err)
+
+			updateStmt := dryRunDB.Model(&ChannelKeyUsage{}).
+				Where("channel_id = ? AND key_fingerprint = ?", 123, "fingerprint").
+				Updates(buildChannelKeyUsageUpdates(7)).Statement
+			updateSQL := updateStmt.SQL.String()
+			updateSQLUpper := strings.ToUpper(updateSQL)
+
+			assert.Contains(t, updateSQL, tc.wantQuote)
+			assert.Contains(t, updateSQL, "CASE WHEN")
+			assert.Contains(t, updateSQLUpper, "UPDATE")
+			assert.Contains(t, updateSQLUpper, "SET")
+			assert.NotContains(t, updateSQLUpper, "RETURNING")
+			assert.NotContains(t, updateSQLUpper, "JSONB")
+			assert.Contains(t, updateSQL, tc.wantBindVar)
+			assert.NotEmpty(t, updateStmt.Vars)
+
+			disableConditionSQL, disableConditionArgs := buildChannelKeyUsageAutoDisableCondition(123, "fingerprint")
+			disableStmt := dryRunDB.Model(&ChannelKeyUsage{}).
+				Where(disableConditionSQL, disableConditionArgs...).
+				Update("status", common.ChannelStatusAutoDisabled).Statement
+			disableSQL := disableStmt.SQL.String()
+			disableSQLUpper := strings.ToUpper(disableSQL)
+
+			assert.Contains(t, disableSQL, tc.wantQuote)
+			assert.Contains(t, disableSQLUpper, "QUOTA_LIMIT_USED >= QUOTA_LIMIT")
+			assert.NotContains(t, disableSQLUpper, "RETURNING")
+			assert.NotContains(t, disableSQLUpper, "JSONB")
+			assert.Contains(t, disableSQL, tc.wantBindVar)
+			assert.NotEmpty(t, disableStmt.Vars)
+		})
+	}
+}
+
 func applyChannelUsageWithRetry(channelID int, quota int) (ChannelUsageApplyResult, error) {
 	var (
 		result ChannelUsageApplyResult
@@ -762,6 +1512,23 @@ func applyChannelUsageWithRetry(channelID int, quota int) (ChannelUsageApplyResu
 
 	for attempt := 0; attempt < 5; attempt++ {
 		result, err = ApplyChannelUsage(channelID, quota)
+		if err == nil || !isSQLiteBusyError(err) {
+			return result, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+
+	return result, err
+}
+
+func applyChannelKeyUsageWithRetry(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
+	var (
+		result ChannelKeyUsageApplyResult
+		err    error
+	)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		result, err = ApplyChannelKeyUsage(channel, selectedKey, keyIndex, quota)
 		if err == nil || !isSQLiteBusyError(err) {
 			return result, err
 		}

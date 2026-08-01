@@ -184,6 +184,11 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		return "", 0, types.NewError(errors.New("no keys available"), types.ErrorCodeChannelNoAvailableKey)
 	}
 
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	if err != nil {
+		return "", 0, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+
 	lock := GetChannelPollingLock(channel.Id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -191,6 +196,11 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	statusList := channel.ChannelInfo.MultiKeyStatusList
 	// helper to get key status, default to enabled when missing
 	getStatus := func(idx int) int {
+		if usage, ok := currentUsages[idx]; ok && usage != nil {
+			if usage.Status != common.ChannelStatusEnabled || usage.IsQuotaExceeded() {
+				return common.ChannelStatusAutoDisabled
+			}
+		}
 		if statusList == nil {
 			return common.ChannelStatusEnabled
 		}
@@ -702,9 +712,13 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			// Use per-channel lock to prevent concurrent map read/write with GetNextEnabledKey
 			pollingLock := GetChannelPollingLock(channelId)
 			pollingLock.Lock()
+			beforeStatus := channelCache.Status
 			// 如果是多Key模式，更新缓存中的状态
 			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
 			pollingLock.Unlock()
+			if beforeStatus != channelCache.Status {
+				CacheUpdateChannelStatus(channelId, channelCache.Status)
+			}
 			//CacheUpdateChannel(channelCache)
 			//return true
 		} else {

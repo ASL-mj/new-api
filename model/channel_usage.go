@@ -15,9 +15,12 @@ import (
 const ChannelKeyFingerprintSecretOption = "ChannelKeyFingerprintSecret"
 
 const (
-	channelUsageUsedQuotaIncrementSQL   = "used_quota + ?"
-	channelUsageQuotaLimitIncrementSQL  = "quota_limit_used + CASE WHEN quota_limit > 0 AND quota_limit_mode IN ? THEN ? ELSE 0 END"
-	channelUsageAutoDisableConditionSQL = "id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit"
+	channelUsageUsedQuotaIncrementSQL      = "used_quota + ?"
+	channelUsageQuotaLimitIncrementSQL     = "quota_limit_used + CASE WHEN quota_limit > 0 AND quota_limit_mode IN ? THEN ? ELSE 0 END"
+	channelUsageAutoDisableConditionSQL    = "id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit"
+	channelKeyUsageQuotaLimitIncrementSQL  = "quota_limit_used + CASE WHEN quota_limit > 0 THEN ? ELSE 0 END"
+	channelKeyUsageAutoDisableConditionSQL = "channel_id = ? AND key_fingerprint = ? AND status = ? AND quota_limit > 0 AND quota_limit_used >= quota_limit"
+	channelKeyQuotaDisabledReason          = "key quota limit reached"
 )
 
 var channelKeyFingerprintSecretState struct {
@@ -79,6 +82,24 @@ type ChannelUsageApplyResult struct {
 	QuotaLimit           int64
 	Status               int
 	ChannelJustExhausted bool
+}
+
+type ChannelKeyUsageApplyResult struct {
+	KeyFingerprint       string
+	KeyIndex             int
+	QuotaLimitUsed       int64
+	QuotaLimit           int64
+	Status               int
+	ChannelStatus        int
+	KeyJustExhausted     bool
+	ChannelJustExhausted bool
+}
+
+func (usage ChannelKeyUsage) IsQuotaExceeded() bool {
+	if usage.QuotaLimit <= 0 {
+		return false
+	}
+	return usage.QuotaLimitUsed >= usage.QuotaLimit
 }
 
 func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error) {
@@ -147,6 +168,226 @@ func buildChannelUsageAutoDisableCondition(channelID int) (string, []interface{}
 
 func channelUsageQuotaLimitModes() []string {
 	return []string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth}
+}
+
+func buildChannelKeyUsageUpdates(quota int) map[string]interface{} {
+	quotaLimitExprSQL, quotaLimitExprArgs := buildChannelKeyUsageQuotaLimitIncrementExpr(quota)
+	return map[string]interface{}{
+		"quota_limit_used": gorm.Expr(quotaLimitExprSQL, quotaLimitExprArgs...),
+	}
+}
+
+func buildChannelKeyUsageQuotaLimitIncrementExpr(quota int) (string, []interface{}) {
+	return channelKeyUsageQuotaLimitIncrementSQL, []interface{}{quota}
+}
+
+func buildChannelKeyUsageAutoDisableCondition(channelID int, fingerprint string) (string, []interface{}) {
+	return channelKeyUsageAutoDisableConditionSQL, []interface{}{
+		channelID,
+		fingerprint,
+		common.ChannelStatusEnabled,
+	}
+}
+
+func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, error) {
+	if channel == nil {
+		return nil, errors.New("channel is nil")
+	}
+	if DB == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	keys := channel.GetKeys()
+	currentUsages := make(map[int]*ChannelKeyUsage, len(keys))
+	if len(keys) == 0 {
+		return currentUsages, nil
+	}
+
+	type currentKeyMeta struct {
+		Fingerprint string
+		Index       int
+		Mask        string
+	}
+
+	currentKeys := make([]currentKeyMeta, 0, len(keys))
+	for idx, key := range keys {
+		fingerprint, err := FingerprintChannelKey(key)
+		if err != nil {
+			return nil, err
+		}
+		currentKeys = append(currentKeys, currentKeyMeta{
+			Fingerprint: fingerprint,
+			Index:       idx,
+			Mask:        MaskChannelKey(key),
+		})
+	}
+
+	var existingUsages []ChannelKeyUsage
+	if err := DB.Where("channel_id = ?", channel.Id).Find(&existingUsages).Error; err != nil {
+		return nil, err
+	}
+
+	existingByFingerprint := make(map[string]*ChannelKeyUsage, len(existingUsages))
+	for i := range existingUsages {
+		existingByFingerprint[existingUsages[i].KeyFingerprint] = &existingUsages[i]
+	}
+
+	now := common.GetTimestamp()
+	createQuotaLimit := int64(0)
+	if channel.UsesKeyQuota() && channel.QuotaLimit > 0 {
+		createQuotaLimit = channel.QuotaLimit
+	}
+
+	creates := make([]ChannelKeyUsage, 0)
+	for _, currentKey := range currentKeys {
+		if usage, ok := existingByFingerprint[currentKey.Fingerprint]; ok {
+			currentUsages[currentKey.Index] = usage
+			updates := map[string]interface{}{}
+			if usage.KeyIndex != currentKey.Index {
+				usage.KeyIndex = currentKey.Index
+				updates["key_index"] = currentKey.Index
+			}
+			if usage.KeyMask != currentKey.Mask {
+				usage.KeyMask = currentKey.Mask
+				updates["key_mask"] = currentKey.Mask
+			}
+			if len(updates) > 0 {
+				updates["updated_at"] = now
+				if err := DB.Model(&ChannelKeyUsage{}).
+					Where("id = ?", usage.Id).
+					Updates(updates).Error; err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
+
+		creates = append(creates, ChannelKeyUsage{
+			ChannelId:         channel.Id,
+			KeyFingerprint:    currentKey.Fingerprint,
+			KeyIndex:          currentKey.Index,
+			KeyMask:           currentKey.Mask,
+			QuotaLimit:        createQuotaLimit,
+			QuotaLimitResetAt: channel.QuotaLimitResetAt,
+			Status:            common.ChannelStatusEnabled,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		})
+	}
+
+	if len(creates) > 0 {
+		if err := DB.Create(&creates).Error; err != nil {
+			return nil, err
+		}
+		for i := range creates {
+			usage := creates[i]
+			currentUsages[usage.KeyIndex] = &usage
+		}
+	}
+
+	return currentUsages, nil
+}
+
+func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
+	var result ChannelKeyUsageApplyResult
+	if channel == nil {
+		return result, errors.New("channel is nil")
+	}
+	if DB == nil {
+		return result, errors.New("database not initialized")
+	}
+
+	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	if err != nil {
+		return result, err
+	}
+
+	fingerprint, err := FingerprintChannelKey(selectedKey)
+	if err != nil {
+		return result, err
+	}
+
+	usage, ok := currentUsages[keyIndex]
+	if !ok || usage == nil || usage.KeyFingerprint != fingerprint {
+		ok = false
+		for _, currentUsage := range currentUsages {
+			if currentUsage != nil && currentUsage.KeyFingerprint == fingerprint {
+				usage = currentUsage
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok || usage == nil {
+		return result, gorm.ErrRecordNotFound
+	}
+
+	result.KeyFingerprint = fingerprint
+	result.KeyIndex = usage.KeyIndex
+
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if quota > 0 && channel.UsesKeyQuota() {
+			updateResult := tx.Model(&ChannelKeyUsage{}).
+				Where("channel_id = ? AND key_fingerprint = ?", channel.Id, fingerprint).
+				Updates(buildChannelKeyUsageUpdates(quota))
+			if updateResult.Error != nil {
+				return updateResult.Error
+			}
+			if updateResult.RowsAffected == 0 {
+				return gorm.ErrRecordNotFound
+			}
+
+			disableConditionSQL, disableConditionArgs := buildChannelKeyUsageAutoDisableCondition(channel.Id, fingerprint)
+			statusUpdateResult := tx.Model(&ChannelKeyUsage{}).
+				Where(disableConditionSQL, disableConditionArgs...).
+				Updates(map[string]interface{}{
+					"status":          common.ChannelStatusAutoDisabled,
+					"disabled_reason": channelKeyQuotaDisabledReason,
+					"disabled_at":     common.GetTimestamp(),
+				})
+			if statusUpdateResult.Error != nil {
+				return statusUpdateResult.Error
+			}
+			result.KeyJustExhausted = statusUpdateResult.RowsAffected == 1
+		}
+
+		var refreshedUsage ChannelKeyUsage
+		if err := tx.Select("key_fingerprint", "key_index", "quota_limit_used", "quota_limit", "status").
+			Where("channel_id = ? AND key_fingerprint = ?", channel.Id, fingerprint).
+			First(&refreshedUsage).Error; err != nil {
+			return err
+		}
+
+		var refreshedChannel Channel
+		if err := tx.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
+			return err
+		}
+
+		result.KeyFingerprint = refreshedUsage.KeyFingerprint
+		result.KeyIndex = refreshedUsage.KeyIndex
+		result.QuotaLimitUsed = refreshedUsage.QuotaLimitUsed
+		result.QuotaLimit = refreshedUsage.QuotaLimit
+		result.Status = refreshedUsage.Status
+		result.ChannelStatus = refreshedChannel.Status
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+
+	if !result.KeyJustExhausted {
+		return result, nil
+	}
+
+	UpdateChannelStatus(channel.Id, selectedKey, common.ChannelStatusAutoDisabled, channelKeyQuotaDisabledReason)
+
+	var refreshedChannel Channel
+	if err := DB.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
+		return result, err
+	}
+	result.ChannelStatus = refreshedChannel.Status
+	result.ChannelJustExhausted = refreshedChannel.Status == common.ChannelStatusAutoDisabled
+	return result, nil
 }
 
 func applyChannelUsageAndPropagate(channelID int, quota int) error {
