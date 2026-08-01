@@ -53,10 +53,15 @@ import {
 import {
   getChannelModels,
   copy,
+  getCurrencyConfig,
   getChannelIcon,
   getModelCategories,
   selectFilter,
 } from '../../../../helpers';
+import {
+  displayAmountToQuota,
+  quotaToDisplayAmount,
+} from '../../../../helpers/quota';
 import ModelSelectModal from './ModelSelectModal';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
@@ -84,6 +89,7 @@ import {
   IconBolt,
   IconSearch,
   IconChevronDown,
+  IconCreditCard,
 } from '@douyinfe/semi-icons';
 
 const { Text, Title } = Typography;
@@ -190,6 +196,8 @@ const EditChannelModal = (props) => {
     multi_key_mode: 'random',
     quota_limit_mode: 'none',
     quota_limit: 0,
+    quota_limit_amount: 0,
+    unlimited_quota: true,
     quota_limit_used: 0,
     quota_limit_reset_at: 0,
     // 渠道额外设置的默认值
@@ -225,6 +233,7 @@ const EditChannelModal = (props) => {
   const [multiKeyMode, setMultiKeyMode] = useState('random');
   const [autoBan, setAutoBan] = useState(true);
   const [inputs, setInputs] = useState(originInputs);
+  const [showQuotaInput, setShowQuotaInput] = useState(false);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
@@ -246,6 +255,7 @@ const EditChannelModal = (props) => {
     useState('');
   const [ollamaModalVisible, setOllamaModalVisible] = useState(false);
   const formApiRef = useRef(null);
+  const lastQuotaLimitModeRef = useRef('channel');
   const [vertexKeys, setVertexKeys] = useState([]);
   const [vertexFileList, setVertexFileList] = useState([]);
   const vertexErroredNames = useRef(new Set()); // 避免重复报错
@@ -726,6 +736,60 @@ const EditChannelModal = (props) => {
     });
   };
 
+  const handleQuotaLimitModeChange = (value) => {
+    const mode = value || 'none';
+    if (mode !== 'none') {
+      lastQuotaLimitModeRef.current = mode;
+    }
+    handleInputChange('quota_limit_mode', mode);
+    handleInputChange('unlimited_quota', mode === 'none');
+    if (mode === 'none') {
+      handleInputChange('quota_limit', 0);
+      handleInputChange('quota_limit_amount', 0);
+    }
+  };
+
+  const handleQuotaAmountChange = (value) => {
+    const amount =
+      value === '' || value == null || !Number.isFinite(Number(value))
+        ? 0
+        : Math.max(0, Number(value));
+    handleInputChange('quota_limit_amount', amount);
+    handleInputChange('quota_limit', displayAmountToQuota(amount));
+  };
+
+  const handleQuotaLimitChange = (value) => {
+    const quota =
+      value === '' || value == null || !Number.isFinite(Number(value))
+        ? 0
+        : Math.max(0, Math.round(Number(value)));
+    handleInputChange('quota_limit', quota);
+    handleInputChange(
+      'quota_limit_amount',
+      Number(quotaToDisplayAmount(quota).toFixed(6)),
+    );
+  };
+
+  const handleUnlimitedQuotaChange = (enabled) => {
+    if (enabled) {
+      const currentMode =
+        formApiRef.current?.getValue('quota_limit_mode') ||
+        inputs.quota_limit_mode;
+      if (currentMode && currentMode !== 'none') {
+        lastQuotaLimitModeRef.current = currentMode;
+      }
+      handleInputChange('quota_limit_mode', 'none');
+      handleInputChange('quota_limit', 0);
+      handleInputChange('quota_limit_amount', 0);
+    } else {
+      handleInputChange(
+        'quota_limit_mode',
+        lastQuotaLimitModeRef.current || 'channel',
+      );
+    }
+    handleInputChange('unlimited_quota', enabled);
+  };
+
   const formatJsonField = (fieldName) => {
     const rawValue = (inputs?.[fieldName] ?? '').trim();
     if (!rawValue) return;
@@ -846,6 +910,7 @@ const EditChannelModal = (props) => {
 
   const loadChannel = async () => {
     setLoading(true);
+    setShowQuotaInput(false);
     let res = await API.get(`/api/channel/${channelId}`);
     if (res === undefined) {
       return;
@@ -998,6 +1063,20 @@ const EditChannelModal = (props) => {
       ) {
         data.base_url = 'https://ark.cn-beijing.volces.com';
       }
+
+      const quotaLimitMode = ['channel', 'key', 'both'].includes(
+        data.quota_limit_mode,
+      )
+        ? data.quota_limit_mode
+        : 'none';
+      data.quota_limit_mode = quotaLimitMode;
+      data.quota_limit = Math.max(0, Number(data.quota_limit || 0));
+      data.unlimited_quota = quotaLimitMode === 'none';
+      data.quota_limit_amount = data.unlimited_quota
+        ? 0
+        : Number(quotaToDisplayAmount(data.quota_limit).toFixed(6));
+      lastQuotaLimitModeRef.current =
+        quotaLimitMode === 'none' ? 'channel' : quotaLimitMode;
 
       initialBaseUrlRef.current = data.base_url || '';
       setInputs(data);
@@ -1335,6 +1414,8 @@ const EditChannelModal = (props) => {
     fetchGroups().then();
     if (!isEdit) {
       initialBaseUrlRef.current = '';
+      lastQuotaLimitModeRef.current = 'channel';
+      setShowQuotaInput(false);
       setInputs(originInputs);
       if (formApiRef.current) {
         formApiRef.current.setValues(originInputs);
@@ -1420,6 +1501,8 @@ const EditChannelModal = (props) => {
     setModelSearchValue('');
     // 重置高级设置折叠状态
     setAdvancedSettingsOpen(false);
+    lastQuotaLimitModeRef.current = 'channel';
+    setShowQuotaInput(false);
     // 清空表单中的key_mode字段
     if (formApiRef.current) {
       formApiRef.current.setValue('key_mode', undefined);
@@ -1570,6 +1653,34 @@ const EditChannelModal = (props) => {
     const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
+
+    const quotaLimitMode = ['channel', 'key', 'both'].includes(
+      localInputs.quota_limit_mode,
+    )
+      ? localInputs.quota_limit_mode
+      : 'none';
+    if (localInputs.unlimited_quota || quotaLimitMode === 'none') {
+      localInputs.quota_limit_mode = 'none';
+      localInputs.quota_limit = 0;
+    } else {
+      localInputs.quota_limit_mode = quotaLimitMode;
+      if (quotaLimitMode === 'channel' || quotaLimitMode === 'both') {
+        localInputs.quota_limit = displayAmountToQuota(
+          localInputs.quota_limit_amount,
+        );
+        if (localInputs.quota_limit <= 0) {
+          showError(t('请输入限额金额'));
+          return;
+        }
+      } else {
+        localInputs.quota_limit = Math.max(
+          0,
+          Math.round(Number(localInputs.quota_limit || 0)),
+        );
+      }
+    }
+    delete localInputs.quota_limit_amount;
+    delete localInputs.unlimited_quota;
 
     if (localInputs.type === 57) {
       if (batch) {
@@ -2233,7 +2344,11 @@ const EditChannelModal = (props) => {
           getFormApi={(api) => (formApiRef.current = api)}
           onSubmit={submit}
         >
-          {() => {
+          {({ values }) => {
+            const unlimitedQuota = values?.unlimited_quota === true;
+            const channelQuotaEnabled = ['channel', 'both'].includes(
+              values?.quota_limit_mode,
+            );
             const advancedSettingsContent = (
               <div className='space-y-4'>
                 {/* Upstream Model Management Section */}
@@ -3664,55 +3779,6 @@ const EditChannelModal = (props) => {
                     )}
                   />
 
-                  <Row gutter={12}>
-                    <Col span={12}>
-                      <Form.Select
-                        field='quota_limit_mode'
-                        label={t('渠道限额模式')}
-                        optionList={[
-                          { value: 'none', label: t('不限额') },
-                          { value: 'channel', label: t('渠道总限额') },
-                          ...((isMultiKeyChannel || (!isEdit && multiToSingle))
-                            ? [
-                                { value: 'key', label: t('按密钥限额') },
-                                { value: 'both', label: t('渠道与密钥同时限额') },
-                              ]
-                            : []),
-                        ]}
-                        onChange={(value) =>
-                          handleInputChange('quota_limit_mode', value)
-                        }
-                        extraText={t('达到限额后自动禁用，重新启用前必须先重置用量')}
-                      />
-                    </Col>
-                    <Col span={12}>
-                      <Form.InputNumber
-                        field='quota_limit'
-                        label={t('限额')}
-                        min={0}
-                        precision={0}
-                        style={{ width: '100%' }}
-                        onChange={(value) =>
-                          handleInputChange('quota_limit', Number(value || 0))
-                        }
-                        extraText={t('填写 0 表示无限额')}
-                      />
-                    </Col>
-                  </Row>
-                  {isEdit && (
-                    <div className='flex items-center justify-between rounded-lg border border-solid border-semi-color-border px-3 py-2'>
-                      <div className='flex flex-col'>
-                        <Text>{t('当前限额已用')}: {inputs.quota_limit_used || 0}</Text>
-                        <Text type='tertiary' size='small'>
-                          {t('重置只清零用量，不会自动启用渠道')}
-                        </Text>
-                      </div>
-                      <Button type='warning' theme='light' onClick={resetChannelQuotaUsage}>
-                        {t('重置用量')}
-                      </Button>
-                    </div>
-                  )}
-
                   {/* Auto Ban - Core Config */}
                   <Form.Switch
                     field='auto_ban'
@@ -3736,6 +3802,132 @@ const EditChannelModal = (props) => {
                     }
                     showClear
                   />
+                </Card>
+
+                {/* Quota Limits */}
+                <Card className='!rounded-2xl shadow-sm border-0'>
+                  <div className='flex items-center mb-2'>
+                    <Avatar size='small' color='green' className='mr-2 shadow-md'>
+                      <IconCreditCard size={16} />
+                    </Avatar>
+                    <div>
+                      <Text className='text-lg font-medium'>{t('额度限制')}</Text>
+                      <div className='text-xs text-gray-600'>
+                        {t('设置渠道和密钥的额度限制，达到限额后会自动禁用')}
+                      </div>
+                    </div>
+                  </div>
+                  <Row gutter={12}>
+                    <Col span={24}>
+                      <Form.Select
+                        field='quota_limit_mode'
+                        label={t('渠道限额模式')}
+                        optionList={[
+                          { value: 'none', label: t('不限额') },
+                          { value: 'channel', label: t('渠道总限额') },
+                          ...((isMultiKeyChannel || (!isEdit && multiToSingle))
+                            ? [
+                                { value: 'key', label: t('按密钥限额') },
+                                { value: 'both', label: t('渠道与密钥同时限额') },
+                              ]
+                            : []),
+                        ]}
+                        onChange={handleQuotaLimitModeChange}
+                        extraText={
+                          values?.quota_limit_mode === 'key'
+                            ? t(
+                                '按密钥限额请在密钥管理中分别设置每个密钥的额度',
+                              )
+                            : t(
+                                '渠道总额度达到限额后自动禁用，重新启用前必须先重置用量',
+                              )
+                        }
+                      />
+                    </Col>
+                    <Col span={24}>
+                      <Form.InputNumber
+                        field='quota_limit_amount'
+                        label={t('金额')}
+                        prefix={getCurrencyConfig().symbol}
+                        placeholder={t('输入金额')}
+                        precision={6}
+                        disabled={unlimitedQuota || !channelQuotaEnabled}
+                        min={0}
+                        step={0.000001}
+                        onChange={handleQuotaAmountChange}
+                        style={{ width: '100%' }}
+                        showClear
+                      />
+                    </Col>
+                    <Col span={24}>
+                      <div
+                        className='text-xs cursor-pointer mt-1'
+                        style={{ color: 'var(--semi-color-text-2)' }}
+                        onClick={() => setShowQuotaInput((v) => !v)}
+                      >
+                        {showQuotaInput
+                          ? `▾ ${t('收起原生额度输入')}`
+                          : `▸ ${t('使用原生额度输入')}`}
+                      </div>
+                      <div
+                        style={{
+                          display: showQuotaInput ? 'block' : 'none',
+                        }}
+                        className='mt-2'
+                      >
+                        <Form.InputNumber
+                          field='quota_limit'
+                          label={t('额度')}
+                          placeholder={t('输入额度')}
+                          disabled={unlimitedQuota || !channelQuotaEnabled}
+                          min={0}
+                          precision={0}
+                          step={500000}
+                          rules={
+                            unlimitedQuota || !channelQuotaEnabled
+                              ? []
+                              : [{ required: true, message: t('请输入额度') }]
+                          }
+                          onChange={handleQuotaLimitChange}
+                          style={{ width: '100%' }}
+                          showClear
+                        />
+                      </div>
+                    </Col>
+                    <Col span={24}>
+                      <Form.Switch
+                        field='unlimited_quota'
+                        label={t('无限额度')}
+                        size='default'
+                        onChange={handleUnlimitedQuotaChange}
+                        extraText={t(
+                          '关闭后设置限额金额；重置用量不会自动启用已禁用渠道',
+                        )}
+                      />
+                    </Col>
+                    {isEdit && (
+                      <Col span={24}>
+                        <div className='flex items-center justify-between rounded-lg border border-solid border-semi-color-border px-3 py-2'>
+                          <div className='flex flex-col'>
+                            <Text>
+                              {t('当前限额已用')}:{' '}
+                              {inputs.quota_limit_used || 0}
+                            </Text>
+                            <Text type='tertiary' size='small'>
+                              {t('重置只清零用量，不会自动启用渠道')}
+                            </Text>
+                          </div>
+                          <Button
+                            type='warning'
+                            theme='light'
+                            onClick={resetChannelQuotaUsage}
+                          >
+                            {t('重置用量')}
+                          </Button>
+                        </div>
+                      </Col>
+                    )}
+                  </Row>
                 </Card>
 
                 {/* Advanced Settings Toggle / Collapse */}
