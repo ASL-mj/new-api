@@ -46,6 +46,7 @@ import {
   API,
   showError,
   showSuccess,
+  showWarning,
   timestamp2string,
 } from '../../../../helpers';
 
@@ -93,34 +94,55 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
         requestData.status = status;
       }
 
-      const [res, usageRes] = await Promise.all([
+      const [manageResult, usageResult] = await Promise.allSettled([
         API.post('/api/channel/multi_key/manage', requestData),
         API.get(`/api/channel/${channel.id}/key-usages`),
       ]);
 
-      if (res.data.success && usageRes.data.success) {
-        const data = res.data.data;
-        const usageByIndex = new Map(
-          (usageRes.data.data || []).map((item) => [item.key_index, item]),
-        );
-        setKeyStatusList(
-          (data.keys || []).map((item) => ({
-            ...item,
-            ...(usageByIndex.get(item.index) || {}),
-          })),
-        );
-        setTotal(data.total || 0);
-        setCurrentPage(data.page || 1);
-        setPageSize(data.page_size || 10);
-        setTotalPages(data.total_pages || 0);
-
-        // Update statistics (these are always the overall statistics)
-        setEnabledCount(data.enabled_count || 0);
-        setManualDisabledCount(data.manual_disabled_count || 0);
-        setAutoDisabledCount(data.auto_disabled_count || 0);
-      } else {
-        showError(res.data.message || usageRes.data.message);
+      if (manageResult.status === 'rejected') {
+        throw manageResult.reason;
       }
+
+      const res = manageResult.value;
+      if (!res.data.success) {
+        showError(res.data.message || t('获取密钥状态失败'));
+        return;
+      }
+
+      let usageItems = [];
+      if (
+        usageResult.status === 'fulfilled' &&
+        usageResult.value.data.success
+      ) {
+        usageItems = usageResult.value.data.data || [];
+      } else {
+        const usageMessage =
+          usageResult.status === 'fulfilled'
+            ? usageResult.value.data.message
+            : usageResult.reason?.message;
+        console.warn('Failed to load channel key usages:', usageMessage);
+        showWarning(t('密钥用量数据加载失败，已显示基础密钥信息'));
+      }
+
+      const data = res.data.data;
+      const usageByIndex = new Map(
+        usageItems.map((item) => [item.key_index, item]),
+      );
+      setKeyStatusList(
+        (data.keys || []).map((item) => ({
+          ...item,
+          ...(usageByIndex.get(item.index) || {}),
+        })),
+      );
+      setTotal(data.total || 0);
+      setCurrentPage(data.page || 1);
+      setPageSize(data.page_size || 10);
+      setTotalPages(data.total_pages || 0);
+
+      // These counts describe all keys, independent of the current page.
+      setEnabledCount(data.enabled_count || 0);
+      setManualDisabledCount(data.manual_disabled_count || 0);
+      setAutoDisabledCount(data.auto_disabled_count || 0);
     } catch (error) {
       console.error(error);
       showError(t('获取密钥状态失败'));
@@ -471,9 +493,13 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       title: t('已用/限额'),
       key: 'quota',
       render: (_, record) => {
+        const hasUsage = Boolean(record.key_fingerprint);
         const used = Number(record.quota_limit_used || 0);
         const limit = Number(record.quota_limit || 0);
         const percent = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+        if (!hasUsage) {
+          return <Text type='tertiary'>--</Text>;
+        }
         return (
           <div className='min-w-32'>
             <Text size='small'>
@@ -493,15 +519,25 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       width: 150,
       render: (_, record) => (
         <Space wrap>
-          <Button size='small' onClick={() => handleEditKeyQuota(record)}>
+          <Button
+            size='small'
+            disabled={!record.key_fingerprint}
+            onClick={() => handleEditKeyQuota(record)}
+          >
             {t('限额')}
           </Button>
           <Popconfirm
+            disabled={!record.key_fingerprint}
             title={t('确定重置该密钥的限额用量吗？')}
             content={t('重置后不会自动启用密钥或渠道')}
             onConfirm={() => handleResetKeyQuota(record)}
           >
-            <Button size='small' type='warning' theme='light'>
+            <Button
+              size='small'
+              type='warning'
+              theme='light'
+              disabled={!record.key_fingerprint}
+            >
               {t('重置')}
             </Button>
           </Popconfirm>

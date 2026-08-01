@@ -1294,8 +1294,7 @@ func loadOrCreateChannelKeyFingerprintSecret() (string, error) {
 }
 
 func fillEmptyChannelKeyFingerprintSecret(db *gorm.DB, generatedSecret string) error {
-	result := db.Model(&Option{}).
-		Where("key = ? AND value = ?", ChannelKeyFingerprintSecretOption, "").
+	result := buildEmptyChannelKeyFingerprintSecretQuery(db).
 		Update("value", generatedSecret)
 	if result.Error != nil {
 		return result.Error
@@ -1305,10 +1304,22 @@ func fillEmptyChannelKeyFingerprintSecret(db *gorm.DB, generatedSecret string) e
 
 func readChannelKeyFingerprintSecretFresh(db *gorm.DB) (Option, error) {
 	var option Option
-	err := db.Session(&gorm.Session{NewDB: true}).
-		Where("key = ?", ChannelKeyFingerprintSecretOption).
+	err := buildChannelKeyFingerprintSecretQuery(db).
 		First(&option).Error
 	return option, err
+}
+
+func buildChannelKeyFingerprintSecretQuery(db *gorm.DB) *gorm.DB {
+	return db.Session(&gorm.Session{NewDB: true}).Where(map[string]interface{}{
+		"key": ChannelKeyFingerprintSecretOption,
+	})
+}
+
+func buildEmptyChannelKeyFingerprintSecretQuery(db *gorm.DB) *gorm.DB {
+	return db.Model(&Option{}).Where(map[string]interface{}{
+		"key":   ChannelKeyFingerprintSecretOption,
+		"value": "",
+	})
 }
 
 func cacheChannelKeyFingerprintSecretOption(secret string) {

@@ -2906,6 +2906,81 @@ func TestChannelUsageStatsAggregateDryRunSQLAcrossDialectors(t *testing.T) {
 	}
 }
 
+func TestChannelKeyFingerprintSecretSQLAcrossDialectors(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		open        func(*sql.DB) (*gorm.DB, error)
+		quotedKey   string
+		quotedValue string
+		bindVar     string
+	}{
+		{
+			name: "sqlite",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(sqlite.Dialector{Conn: conn}, &gorm.Config{DryRun: true})
+			},
+			quotedKey:   "`key`",
+			quotedValue: "`value`",
+			bindVar:     "?",
+		},
+		{
+			name: "mysql",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(mysql.New(mysql.Config{
+					Conn:                      conn,
+					SkipInitializeWithVersion: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			quotedKey:   "`key`",
+			quotedValue: "`value`",
+			bindVar:     "?",
+		},
+		{
+			name: "postgres",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{
+					Conn:             conn,
+					WithoutReturning: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			quotedKey:   "\"key\"",
+			quotedValue: "\"value\"",
+			bindVar:     "$",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dryRunDB, openErr := tc.open(sqlDB)
+			require.NoError(t, openErr)
+
+			var option Option
+			readStmt := buildChannelKeyFingerprintSecretQuery(dryRunDB).First(&option).Statement
+			readSQL := readStmt.SQL.String()
+			assert.Contains(t, readSQL, tc.quotedKey)
+			assert.Contains(t, readSQL, tc.bindVar)
+			assert.NotContains(t, strings.ToUpper(readSQL), "WHERE KEY =")
+			assert.Equal(t, []interface{}{ChannelKeyFingerprintSecretOption}, readStmt.Vars)
+
+			updateStmt := buildEmptyChannelKeyFingerprintSecretQuery(dryRunDB).
+				Update("value", "generated-secret").Statement
+			updateSQL := updateStmt.SQL.String()
+			assert.Contains(t, updateSQL, tc.quotedKey)
+			assert.Contains(t, updateSQL, tc.quotedValue)
+			assert.Contains(t, updateSQL, tc.bindVar)
+			assert.NotContains(t, strings.ToUpper(updateSQL), "WHERE KEY =")
+			assert.Contains(t, updateStmt.Vars, ChannelKeyFingerprintSecretOption)
+			assert.Contains(t, updateStmt.Vars, "")
+			assert.Contains(t, updateStmt.Vars, "generated-secret")
+		})
+	}
+}
+
 func TestFingerprintChannelKeyPersistsSecretAcrossCacheReset(t *testing.T) {
 	prepareChannelUsageSecretDB(t)
 	t.Setenv("CRYPTO_SECRET", "")
