@@ -166,3 +166,24 @@ func TestManageMultiKeysRejectsExhaustedKeyThenEnablesAfterReset(t *testing.T) {
 	require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&ability).Error)
 	assert.True(t, ability.Enabled)
 }
+
+func TestUpdateChannelPartialStatusChangePreservesQuotaConfiguration(t *testing.T) {
+	db := setupChannelQuotaGuardControllerTestDB(t)
+	channel := &model.Channel{
+		Id: 403, Name: "partial-update", Key: "sk-partial", Status: common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeChannel, QuotaLimit: 1000,
+		QuotaLimitUsed: 250, QuotaLimitResetAt: 123,
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	recorder := performMonitorGroupRequest(t, http.MethodPut, "/api/channel/", `{"id":403,"status":2}`, UpdateChannel)
+	response := decodeChannelQuotaGuardResponse(t, recorder.Body.String())
+	require.Equal(t, true, response["success"])
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, model.ChannelQuotaLimitModeChannel, reloaded.QuotaLimitMode)
+	assert.EqualValues(t, 1000, reloaded.QuotaLimit)
+	assert.EqualValues(t, 250, reloaded.QuotaLimitUsed)
+	assert.EqualValues(t, 123, reloaded.QuotaLimitResetAt)
+}

@@ -880,6 +880,13 @@ func UpdateChannel(c *gin.Context) {
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
+	if channel.QuotaLimitMode == "" {
+		channel.QuotaLimitMode = originChannel.QuotaLimitMode
+		channel.QuotaLimit = originChannel.QuotaLimit
+	}
+	// Usage counters are maintained only by settlement and reset APIs.
+	channel.QuotaLimitUsed = originChannel.QuotaLimitUsed
+	channel.QuotaLimitResetAt = originChannel.QuotaLimitResetAt
 	if !channel.ChannelInfo.IsMultiKey &&
 		(channel.QuotaLimitMode == model.ChannelQuotaLimitModeKey || channel.QuotaLimitMode == model.ChannelQuotaLimitModeBoth) {
 		c.JSON(http.StatusOK, gin.H{
