@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Card, Tabs, TabPane } from '@douyinfe/semi-ui';
+import { Button, ButtonGroup, Card, Tabs, TabPane } from '@douyinfe/semi-ui';
 import { PieChart } from 'lucide-react';
 import { VChart } from '@visactor/react-vchart';
 
@@ -30,6 +30,8 @@ const ChartsPanel = ({
   spec_pie,
   spec_rank_bar,
   spec_user_rank,
+  userRankMetric,
+  setUserRankMetric,
   spec_user_trend,
   isAdminUser,
   CARD_PROPS,
@@ -58,7 +60,7 @@ const ChartsPanel = ({
             <TabPane tab={<span>{t('调用次数分布')}</span>} itemKey='3' />
             <TabPane tab={<span>{t('调用次数排行')}</span>} itemKey='4' />
             {isAdminUser && (
-              <TabPane tab={<span>{t('用户消耗排行')}</span>} itemKey='5' />
+              <TabPane tab={<span>{t('用户排行')}</span>} itemKey='5' />
             )}
             {isAdminUser && (
               <TabPane tab={<span>{t('用户消耗趋势')}</span>} itemKey='6' />
@@ -82,7 +84,30 @@ const ChartsPanel = ({
           <VChart spec={spec_rank_bar} option={CHART_CONFIG} />
         )}
         {activeChartTab === '5' && isAdminUser && (
-          <VChart spec={spec_user_rank} option={CHART_CONFIG} />
+          <div className='h-full flex flex-col gap-2'>
+            <div className='flex justify-end px-2'>
+              <ButtonGroup>
+                {[
+                  ['quota', t('额度消耗')],
+                  ['tokens', t('Token 消耗')],
+                  ['count', t('调用次数')],
+                ].map(([value, label]) => (
+                  <Button
+                    key={value}
+                    size='small'
+                    type={userRankMetric === value ? 'primary' : 'tertiary'}
+                    theme={userRankMetric === value ? 'solid' : 'light'}
+                    onClick={() => setUserRankMetric(value)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </ButtonGroup>
+            </div>
+            <div className='flex-1 min-h-0'>
+              <VChart spec={spec_user_rank} option={CHART_CONFIG} />
+            </div>
+          </div>
         )}
         {activeChartTab === '6' && isAdminUser && (
           <VChart spec={spec_user_trend} option={CHART_CONFIG} />

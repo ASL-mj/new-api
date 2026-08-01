@@ -390,21 +390,31 @@ export const generateChartTimePoints = (
 
 // ========== 用户维度数据处理 ==========
 export const processUserData = (data, dataExportDefaultTime, limit = 10) => {
-  const userQuotaTotal = new Map();
+  const userTotals = new Map();
   data.forEach((item) => {
-    const prev = userQuotaTotal.get(item.username) || 0;
-    userQuotaTotal.set(item.username, prev + item.quota);
+    const prev = userTotals.get(item.username) || {
+      quota: 0,
+      tokenUsed: 0,
+      count: 0,
+    };
+    userTotals.set(item.username, {
+      quota: prev.quota + Number(item.quota || 0),
+      tokenUsed: prev.tokenUsed + Number(item.token_used || 0),
+      count: prev.count + Number(item.count || 0),
+    });
   });
 
-  const sorted = Array.from(userQuotaTotal.entries()).sort(
-    (a, b) => b[1] - a[1],
+  const sorted = Array.from(userTotals.entries()).sort(
+    (a, b) => b[1].quota - a[1].quota,
   );
   const topUsers = sorted.slice(0, limit).map(([u]) => u);
   const topUserSet = new Set(topUsers);
 
-  const rankingData = sorted.slice(0, limit).map(([username, quota]) => ({
+  const rankingData = sorted.map(([username, totals]) => ({
     User: username,
-    Quota: quota,
+    Quota: totals.quota,
+    TokenUsed: totals.tokenUsed,
+    Count: totals.count,
   }));
 
   const showYear = isDataCrossYear(data.map((item) => item.created_at));
