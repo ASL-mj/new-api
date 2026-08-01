@@ -114,6 +114,43 @@ func resetChannelCacheForTest() {
 	channelsIDM = nil
 }
 
+func cloneOptionMapForTest(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func setChannelUsageTimezoneOptionForTest(t *testing.T, timezone string, present bool) {
+	t.Helper()
+
+	previousDefault := common.ChannelUsageTimezone
+	common.OptionMapRWMutex.Lock()
+	previousMap := cloneOptionMapForTest(common.OptionMap)
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	if present {
+		common.OptionMap["ChannelUsageTimezone"] = timezone
+	} else {
+		delete(common.OptionMap, "ChannelUsageTimezone")
+	}
+	common.OptionMapRWMutex.Unlock()
+	resetChannelUsageTimezoneCache()
+
+	t.Cleanup(func() {
+		common.ChannelUsageTimezone = previousDefault
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousMap
+		common.OptionMapRWMutex.Unlock()
+		resetChannelUsageTimezoneCache()
+	})
+}
+
 func prepareChannelUsageMigrationDB(t *testing.T) {
 	t.Helper()
 	modelTestDBMutex.Lock()
@@ -2108,11 +2145,12 @@ func TestRecordChannelUsageDailyAggregatesSummaryAndKeyRows(t *testing.T) {
 	assert.NotZero(t, rows[1].UpdatedAt)
 }
 
-func TestRecordChannelUsageDailyUsesLocalTimezoneDateBoundary(t *testing.T) {
+func TestRecordChannelUsageDailyUsesConfiguredTimezoneDateBoundary(t *testing.T) {
 	prepareChannelUsageTable(t)
+	setChannelUsageTimezoneOptionForTest(t, "Asia/Shanghai", true)
 
 	previousLocal := time.Local
-	time.Local = time.FixedZone("UTC+8", 8*60*60)
+	time.Local = time.FixedZone("UTC-5", -5*60*60)
 	t.Cleanup(func() {
 		time.Local = previousLocal
 	})
@@ -2148,6 +2186,56 @@ func TestRecordChannelUsageDailyUsesLocalTimezoneDateBoundary(t *testing.T) {
 	require.Len(t, detailRows, 2)
 	assert.Equal(t, "2026-08-01", detailRows[0].UsageDate)
 	assert.Equal(t, "2026-08-02", detailRows[1].UsageDate)
+}
+
+func TestChannelUsageDateFromTimeUsesConfiguredTimezoneAcrossNodes(t *testing.T) {
+	setChannelUsageTimezoneOptionForTest(t, "Asia/Shanghai", true)
+	t.Setenv("CHANNEL_USAGE_TIMEZONE", "UTC")
+
+	at := time.Date(2026, 8, 1, 16, 30, 0, 0, time.UTC)
+	previousLocal := time.Local
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	time.Local = time.FixedZone("UTC-7", -7*60*60)
+	firstDate, err := channelUsageDateFromTime(at)
+	require.NoError(t, err)
+
+	time.Local = time.FixedZone("UTC+3", 3*60*60)
+	secondDate, err := channelUsageDateFromTime(at)
+	require.NoError(t, err)
+
+	assert.Equal(t, "2026-08-02", firstDate)
+	assert.Equal(t, firstDate, secondDate)
+}
+
+func TestChannelUsageDateFromTimeUsesEnvWhenOptionMissing(t *testing.T) {
+	setChannelUsageTimezoneOptionForTest(t, "", false)
+	t.Setenv("CHANNEL_USAGE_TIMEZONE", "UTC")
+	common.ChannelUsageTimezone = "Asia/Shanghai"
+
+	date, err := channelUsageDateFromTime(time.Date(2026, 8, 1, 16, 30, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Equal(t, "2026-08-01", date)
+}
+
+func TestChannelUsageDateFromTimeReturnsErrorForInvalidConfiguredTimezone(t *testing.T) {
+	setChannelUsageTimezoneOptionForTest(t, "Invalid/Timezone", true)
+
+	date, err := channelUsageDateFromTime(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+	require.Error(t, err)
+	assert.Empty(t, date)
+	assert.Contains(t, err.Error(), "invalid channel usage timezone")
+}
+
+func TestRecordChannelUsageDailyReturnsConfiguredTimezoneError(t *testing.T) {
+	prepareChannelUsageTable(t)
+	setChannelUsageTimezoneOptionForTest(t, "Invalid/Timezone", true)
+
+	err := RecordChannelUsageDaily(105, "fp-invalid-timezone", 1, 2, 1, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid channel usage timezone")
 }
 
 func TestRecordChannelUsageDailyConcurrentDoesNotLoseCounts(t *testing.T) {
@@ -2276,6 +2364,8 @@ func TestGetChannelUsageStatsBatchZeroFillsAndUses30DaySummaryRange(t *testing.T
 	alpha := stats[201]
 	assert.Equal(t, 201, alpha.ChannelID)
 	assert.EqualValues(t, 50, alpha.TodayQuota)
+	assert.EqualValues(t, 500, alpha.TodayTokenUsed)
+	assert.EqualValues(t, 5, alpha.TodayRequestCount)
 	assert.EqualValues(t, 80, alpha.Last30dQuota)
 	assert.EqualValues(t, 800, alpha.Last30dTokenUsed)
 	assert.EqualValues(t, 8, alpha.Last30dRequestCount)
@@ -2286,6 +2376,8 @@ func TestGetChannelUsageStatsBatchZeroFillsAndUses30DaySummaryRange(t *testing.T
 	beta := stats[202]
 	assert.Equal(t, 202, beta.ChannelID)
 	assert.EqualValues(t, 0, beta.TodayQuota)
+	assert.EqualValues(t, 0, beta.TodayTokenUsed)
+	assert.EqualValues(t, 0, beta.TodayRequestCount)
 	assert.EqualValues(t, 0, beta.Last30dQuota)
 	assert.EqualValues(t, 0, beta.Last30dTokenUsed)
 	assert.EqualValues(t, 0, beta.Last30dRequestCount)
@@ -2296,6 +2388,8 @@ func TestGetChannelUsageStatsBatchZeroFillsAndUses30DaySummaryRange(t *testing.T
 	unknown := stats[999]
 	assert.Equal(t, 999, unknown.ChannelID)
 	assert.Zero(t, unknown.TodayQuota)
+	assert.Zero(t, unknown.TodayTokenUsed)
+	assert.Zero(t, unknown.TodayRequestCount)
 	assert.Zero(t, unknown.Last30dQuota)
 	assert.Zero(t, unknown.Last30dTokenUsed)
 	assert.Zero(t, unknown.Last30dRequestCount)

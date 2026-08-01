@@ -1,17 +1,76 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
-// DataExportDefaultTime is a display/export granularity option, not a timezone.
-// Daily channel usage follows the process-local timezone until the project adds
-// a dedicated dashboard timezone setting.
-func channelUsageDateFromTime(at time.Time) string {
+	"github.com/QuantumNous/new-api/common"
+)
+
+var channelUsageTimezoneCache struct {
+	sync.RWMutex
+	name string
+	loc  *time.Location
+}
+
+func channelUsageDateFromTime(at time.Time) (string, error) {
 	if at.IsZero() {
 		at = time.Now()
 	}
-	loc := time.Local
-	if loc == nil {
-		loc = time.UTC
+
+	loc, err := getChannelUsageLocation()
+	if err != nil {
+		return "", err
 	}
-	return at.In(loc).Format("2006-01-02")
+	return at.In(loc).Format("2006-01-02"), nil
+}
+
+func getChannelUsageLocation() (*time.Location, error) {
+	timezone := getChannelUsageTimezoneName()
+
+	channelUsageTimezoneCache.RLock()
+	if channelUsageTimezoneCache.name == timezone && channelUsageTimezoneCache.loc != nil {
+		loc := channelUsageTimezoneCache.loc
+		channelUsageTimezoneCache.RUnlock()
+		return loc, nil
+	}
+	channelUsageTimezoneCache.RUnlock()
+
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("invalid channel usage timezone %q: %w", timezone, err)
+	}
+
+	channelUsageTimezoneCache.Lock()
+	channelUsageTimezoneCache.name = timezone
+	channelUsageTimezoneCache.loc = loc
+	channelUsageTimezoneCache.Unlock()
+	return loc, nil
+}
+
+func getChannelUsageTimezoneName() string {
+	common.OptionMapRWMutex.RLock()
+	if common.OptionMap != nil {
+		if timezone := strings.TrimSpace(common.OptionMap["ChannelUsageTimezone"]); timezone != "" {
+			common.OptionMapRWMutex.RUnlock()
+			return timezone
+		}
+	}
+	common.OptionMapRWMutex.RUnlock()
+
+	if timezone := strings.TrimSpace(os.Getenv("CHANNEL_USAGE_TIMEZONE")); timezone != "" {
+		return timezone
+	}
+
+	return strings.TrimSpace(common.ChannelUsageTimezone)
+}
+
+func resetChannelUsageTimezoneCache() {
+	channelUsageTimezoneCache.Lock()
+	channelUsageTimezoneCache.name = ""
+	channelUsageTimezoneCache.loc = nil
+	channelUsageTimezoneCache.Unlock()
 }

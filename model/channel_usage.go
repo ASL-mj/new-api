@@ -81,6 +81,8 @@ func (ChannelUsageDaily) TableName() string {
 type ChannelUsageStats struct {
 	ChannelID           int     `json:"channel_id"`
 	TodayQuota          int64   `json:"today_quota"`
+	TodayTokenUsed      int64   `json:"today_token_used"`
+	TodayRequestCount   int64   `json:"today_request_count"`
 	Last30dQuota        int64   `json:"last30d_quota"`
 	Last30dTokenUsed    int64   `json:"last30d_token_used"`
 	Last30dRequestCount int64   `json:"last30d_request_count"`
@@ -92,6 +94,8 @@ type ChannelUsageStats struct {
 type channelUsageDailyAggregate struct {
 	ChannelID           int
 	TodayQuota          int64
+	TodayTokenUsed      int64
+	TodayRequestCount   int64
 	Last30dQuota        int64
 	Last30dTokenUsed    int64
 	Last30dRequestCount int64
@@ -131,7 +135,10 @@ func RecordChannelUsageDaily(channelID int, keyFingerprint string, quota int64, 
 		return errors.New("invalid channel id")
 	}
 
-	usageDate := channelUsageDateFromTime(now)
+	usageDate, err := channelUsageDateFromTime(now)
+	if err != nil {
+		return err
+	}
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -237,9 +244,13 @@ func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) 
 			Select(
 				"channel_id, "+
 					"SUM(CASE WHEN usage_date = ? THEN quota ELSE 0 END) AS today_quota, "+
+					"SUM(CASE WHEN usage_date = ? THEN token_used ELSE 0 END) AS today_token_used, "+
+					"SUM(CASE WHEN usage_date = ? THEN request_count ELSE 0 END) AS today_request_count, "+
 					"SUM(quota) AS last30d_quota, "+
 					"SUM(token_used) AS last30d_token_used, "+
 					"SUM(request_count) AS last30d_request_count",
+				today,
+				today,
 				today,
 			).
 			Where("channel_id IN ? AND key_fingerprint = ? AND usage_date >= ? AND usage_date <= ?", chunk, "", start30d, today).
@@ -250,6 +261,8 @@ func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) 
 		for _, aggregate := range aggregates {
 			stat := results[aggregate.ChannelID]
 			stat.TodayQuota = aggregate.TodayQuota
+			stat.TodayTokenUsed = aggregate.TodayTokenUsed
+			stat.TodayRequestCount = aggregate.TodayRequestCount
 			stat.Last30dQuota = aggregate.Last30dQuota
 			stat.Last30dTokenUsed = aggregate.Last30dTokenUsed
 			stat.Last30dRequestCount = aggregate.Last30dRequestCount
