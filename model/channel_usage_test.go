@@ -1,7 +1,6 @@
 package model
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,11 +10,9 @@ import (
 	"gorm.io/gorm"
 )
 
-var channelUsageTestDBMutex sync.Mutex
-
 func prepareChannelUsageTable(t *testing.T) {
 	t.Helper()
-	channelUsageTestDBMutex.Lock()
+	modelTestDBMutex.Lock()
 
 	previousDB := DB
 	previousUsingSQLite := common.UsingSQLite
@@ -42,7 +39,7 @@ func prepareChannelUsageTable(t *testing.T) {
 		common.UsingMySQL = previousUsingMySQL
 		common.UsingPostgreSQL = previousUsingPostgreSQL
 		_ = sqlDB.Close()
-		channelUsageTestDBMutex.Unlock()
+		modelTestDBMutex.Unlock()
 	})
 }
 

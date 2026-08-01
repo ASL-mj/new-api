@@ -12,6 +12,7 @@ import (
 
 func prepareMonitorTables(t *testing.T) {
 	t.Helper()
+	modelTestDBMutex.Lock()
 
 	previousDB := DB
 	previousLogDB := LOG_DB
@@ -39,6 +40,7 @@ func prepareMonitorTables(t *testing.T) {
 		common.UsingMySQL = previousUsingMySQL
 		common.UsingPostgreSQL = previousUsingPostgreSQL
 		_ = sqlDB.Close()
+		modelTestDBMutex.Unlock()
 	})
 }
 

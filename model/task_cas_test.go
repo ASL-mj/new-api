@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var modelTestDBMutex sync.Mutex
+
 func TestMain(m *testing.M) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

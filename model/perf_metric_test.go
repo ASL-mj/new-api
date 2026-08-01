@@ -13,6 +13,7 @@ import (
 
 func preparePerfMetricTable(t *testing.T) {
 	t.Helper()
+	modelTestDBMutex.Lock()
 
 	previousDB := DB
 	previousLogDB := LOG_DB
@@ -42,6 +43,7 @@ func preparePerfMetricTable(t *testing.T) {
 		common.UsingMySQL = previousUsingMySQL
 		common.UsingPostgreSQL = previousUsingPostgreSQL
 		_ = sqlDB.Close()
+		modelTestDBMutex.Unlock()
 	})
 }
 
@@ -252,6 +254,8 @@ func TestGetPerfMetricSummaryBucketsByRange(t *testing.T) {
 func TestGetPerfMetricSummaryBucketsByRangeEmptyGroups(t *testing.T) {
 	preparePerfMetricTable(t)
 
+	// preparePerfMetricTable holds modelTestDBMutex for the full test lifetime,
+	// so this temporary nil override remains serialized with other DB-swapping tests.
 	previousDB := DB
 	DB = nil
 	t.Cleanup(func() {
