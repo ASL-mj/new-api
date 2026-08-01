@@ -61,11 +61,12 @@ func GetAllEnableAbilities() []Ability {
 func getPriority(group string, model string, retry int) (int, error) {
 
 	var priorities []int
-	err := DB.Model(&Ability{}).
-		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-		Order("priority DESC").              // 按优先级降序排序
-		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
+	groupColumn := qualifiedAbilityGroupColumn()
+	err := schedulableAbilityQuery().
+		Select("DISTINCT(abilities.priority)").
+		Where(groupColumn+" = ? and abilities.model = ? and abilities.enabled = ?", group, model, true).
+		Order("abilities.priority DESC").              // 按优先级降序排序
+		Pluck("abilities.priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
 
 	if err != nil {
 		// 处理错误
@@ -88,15 +89,43 @@ func getPriority(group string, model string, retry int) (int, error) {
 	return priorityToUse, nil
 }
 
+func qualifiedAbilityGroupColumn() string {
+	groupColumn := commonGroupCol
+	if groupColumn == "" {
+		if common.UsingPostgreSQL {
+			groupColumn = `"group"`
+		} else {
+			groupColumn = "`group`"
+		}
+	}
+	return "abilities." + groupColumn
+}
+
+func schedulableAbilityQuery() *gorm.DB {
+	return DB.Model(&Ability{}).
+		Select("abilities.*").
+		Joins("JOIN channels ON channels.id = abilities.channel_id").
+		Where("channels.status = ?", common.ChannelStatusEnabled).
+		Where(
+			"channels.quota_limit <= 0 OR channels.quota_limit_mode NOT IN ? OR channels.quota_limit_used < channels.quota_limit",
+			channelUsageQuotaLimitModes(),
+		)
+}
+
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+	groupColumn := qualifiedAbilityGroupColumn()
+	maxPrioritySubQuery := schedulableAbilityQuery().
+		Select("MAX(abilities.priority)").
+		Where(groupColumn+" = ? and abilities.model = ? and abilities.enabled = ?", group, model, true)
+	channelQuery := schedulableAbilityQuery().
+		Where(groupColumn+" = ? and abilities.model = ? and abilities.enabled = ? and abilities.priority = (?)", group, model, true, maxPrioritySubQuery)
 	if retry != 0 {
 		priority, err := getPriority(group, model, retry)
 		if err != nil {
 			return nil, err
 		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			channelQuery = schedulableAbilityQuery().
+				Where(groupColumn+" = ? and abilities.model = ? and abilities.enabled = ? and abilities.priority = ?", group, model, true, priority)
 		}
 	}
 
@@ -112,9 +141,9 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 		return nil, err
 	}
 	if common.UsingSQLite || common.UsingPostgreSQL {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
+		err = channelQuery.Order("abilities.weight DESC").Find(&abilities).Error
 	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
+		err = channelQuery.Order("abilities.weight DESC").Find(&abilities).Error
 	}
 	if err != nil {
 		return nil, err

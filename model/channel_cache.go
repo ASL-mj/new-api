@@ -39,7 +39,7 @@ func InitChannelCache() {
 		newGroup2model2channels[group] = make(map[string][]int)
 	}
 	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
+		if channel.Status != common.ChannelStatusEnabled || channel.IsChannelQuotaExceeded() {
 			continue // skip disabled channels
 		}
 		groups := strings.Split(channel.Group, ",")
@@ -111,6 +111,22 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 		channels = group2model2channels[group][normalizedModel]
 	}
 
+	if len(channels) == 0 {
+		return nil, nil
+	}
+
+	eligibleChannels := make([]int, 0, len(channels))
+	for _, channelID := range channels {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelID)
+		}
+		if channel.Status != common.ChannelStatusEnabled || channel.IsChannelQuotaExceeded() {
+			continue
+		}
+		eligibleChannels = append(eligibleChannels, channelID)
+	}
+	channels = eligibleChannels
 	if len(channels) == 0 {
 		return nil, nil
 	}

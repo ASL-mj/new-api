@@ -867,6 +867,15 @@ func UpdateChannel(c *gin.Context) {
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
+	if channel.Status == common.ChannelStatusEnabled && originChannel.Status != common.ChannelStatusEnabled {
+		if err := originChannel.CanEnableChannel(); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	}
 
 	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
 	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
@@ -1401,19 +1410,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
-		if channel.ChannelInfo.MultiKeyStatusList == nil {
-			channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledTime == nil {
-			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledReason == nil {
-			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-		}
-
-		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
-
-		err = channel.Update()
+		err = model.SetChannelKeyStatus(channel, keyIndex, common.ChannelStatusManuallyDisabled, "manually disabled")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1444,20 +1441,12 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
-		// 从状态列表中删除该密钥的记录，使其回到默认启用状态
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledTime != nil {
-			delete(channel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
-			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
-		}
-
-		err = channel.Update()
+		err = model.SetChannelKeyStatus(channel, keyIndex, common.ChannelStatusEnabled, "")
 		if err != nil {
-			common.ApiError(c, err)
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
 			return
 		}
 
@@ -1475,13 +1464,16 @@ func ManageMultiKeys(c *gin.Context) {
 			enabledCount = len(channel.ChannelInfo.MultiKeyStatusList)
 		}
 
-		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
-		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
-		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-
-		err = channel.Update()
+		keyIndexes := make([]int, 0, channel.ChannelInfo.MultiKeySize)
+		for keyIndex := 0; keyIndex < channel.ChannelInfo.MultiKeySize; keyIndex++ {
+			keyIndexes = append(keyIndexes, keyIndex)
+		}
+		err = model.SetChannelKeyStatuses(channel, keyIndexes, common.ChannelStatusEnabled, "")
 		if err != nil {
-			common.ApiError(c, err)
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
 			return
 		}
 
@@ -1493,32 +1485,18 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 
 	case "disable_all_keys":
-		// 禁用所有启用的密钥
-		if channel.ChannelInfo.MultiKeyStatusList == nil {
-			channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledTime == nil {
-			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledReason == nil {
-			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-		}
-
-		var disabledCount int
+		keyIndexes := make([]int, 0, channel.ChannelInfo.MultiKeySize)
 		for i := 0; i < channel.ChannelInfo.MultiKeySize; i++ {
 			status := 1 // default enabled
 			if s, exists := channel.ChannelInfo.MultiKeyStatusList[i]; exists {
 				status = s
 			}
-
-			// 只禁用当前启用的密钥
 			if status == 1 {
-				channel.ChannelInfo.MultiKeyStatusList[i] = 2 // disabled
-				disabledCount++
+				keyIndexes = append(keyIndexes, i)
 			}
 		}
 
-		if disabledCount == 0 {
+		if len(keyIndexes) == 0 {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "没有可禁用的密钥",
@@ -1526,7 +1504,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
-		err = channel.Update()
+		err = model.SetChannelKeyStatuses(channel, keyIndexes, common.ChannelStatusManuallyDisabled, "manually disabled")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1535,7 +1513,7 @@ func ManageMultiKeys(c *gin.Context) {
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
-			"message": fmt.Sprintf("已禁用 %d 个密钥", disabledCount),
+			"message": fmt.Sprintf("已禁用 %d 个密钥", len(keyIndexes)),
 		})
 		return
 

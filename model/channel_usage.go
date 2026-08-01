@@ -575,6 +575,11 @@ func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, e
 	if DB == nil {
 		return nil, errors.New("database not initialized")
 	}
+	if channel != nil && len(channel.GetKeys()) > 0 {
+		if _, err := getChannelKeyFingerprintSecret(); err != nil {
+			return nil, err
+		}
+	}
 	var currentUsages map[int]*ChannelKeyUsage
 	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
 		var err error
@@ -582,6 +587,142 @@ func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, e
 		return err
 	})
 	return currentUsages, err
+}
+
+func SetChannelKeyStatuses(channel *Channel, keyIndexes []int, status int, reason string) error {
+	if channel == nil {
+		return errors.New("channel is nil")
+	}
+	if DB == nil {
+		return errors.New("database not initialized")
+	}
+	if len(keyIndexes) == 0 {
+		return nil
+	}
+	if len(channel.GetKeys()) > 0 {
+		if _, err := getChannelKeyFingerprintSecret(); err != nil {
+			return err
+		}
+	}
+
+	var updatedChannel Channel
+	parentStatusChanged := false
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&updatedChannel, channel.Id).Error; err != nil {
+			return err
+		}
+		if !updatedChannel.ChannelInfo.IsMultiKey {
+			return errors.New("channel is not multi-key")
+		}
+
+		keys := updatedChannel.GetKeys()
+		currentUsages, err := ensureChannelKeyUsageRecords(tx, &updatedChannel)
+		if err != nil {
+			return err
+		}
+
+		uniqueIndexes := make(map[int]struct{}, len(keyIndexes))
+		for _, keyIndex := range keyIndexes {
+			if keyIndex < 0 || keyIndex >= len(keys) {
+				return fmt.Errorf("channel key index out of range: %d", keyIndex)
+			}
+			uniqueIndexes[keyIndex] = struct{}{}
+		}
+
+		if status == common.ChannelStatusEnabled && updatedChannel.UsesKeyQuota() {
+			for keyIndex := range uniqueIndexes {
+				usage := currentUsages[keyIndex]
+				if usage != nil && usage.IsQuotaExceeded() {
+					return fmt.Errorf("%w: key index %d", ErrChannelKeyQuotaResetRequired, keyIndex)
+				}
+			}
+		}
+
+		beforeStatus := updatedChannel.Status
+		now := common.GetTimestamp()
+		for keyIndex := range uniqueIndexes {
+			usage := currentUsages[keyIndex]
+			if usage == nil {
+				return fmt.Errorf("channel key usage not found: index=%d", keyIndex)
+			}
+
+			usageUpdates := map[string]interface{}{
+				"status":     status,
+				"updated_at": now,
+			}
+			if status == common.ChannelStatusEnabled {
+				usageUpdates["disabled_reason"] = ""
+				usageUpdates["disabled_at"] = 0
+				delete(updatedChannel.ChannelInfo.MultiKeyStatusList, keyIndex)
+				delete(updatedChannel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
+				delete(updatedChannel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
+			} else {
+				usageUpdates["disabled_reason"] = reason
+				usageUpdates["disabled_at"] = now
+				if updatedChannel.ChannelInfo.MultiKeyStatusList == nil {
+					updatedChannel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
+				}
+				if updatedChannel.ChannelInfo.MultiKeyDisabledReason == nil {
+					updatedChannel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+				}
+				if updatedChannel.ChannelInfo.MultiKeyDisabledTime == nil {
+					updatedChannel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
+				}
+				updatedChannel.ChannelInfo.MultiKeyStatusList[keyIndex] = status
+				updatedChannel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
+				updatedChannel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = now
+			}
+
+			if err := tx.Model(&ChannelKeyUsage{}).Where("id = ?", usage.Id).Updates(usageUpdates).Error; err != nil {
+				return err
+			}
+		}
+
+		normalizeChannelInfoStatusMaps(&updatedChannel.ChannelInfo)
+		if len(updatedChannel.ChannelInfo.MultiKeyStatusList) >= updatedChannel.ChannelInfo.MultiKeySize {
+			updatedChannel.Status = common.ChannelStatusAutoDisabled
+			info := updatedChannel.GetOtherInfo()
+			info["status_reason"] = "All keys are disabled"
+			info["status_time"] = now
+			updatedChannel.SetOtherInfo(info)
+		} else if status == common.ChannelStatusEnabled &&
+			updatedChannel.Status == common.ChannelStatusAutoDisabled &&
+			!updatedChannel.IsChannelQuotaExceeded() {
+			info := updatedChannel.GetOtherInfo()
+			if info["status_reason"] == "All keys are disabled" {
+				updatedChannel.Status = common.ChannelStatusEnabled
+				delete(info, "status_reason")
+				delete(info, "status_time")
+				updatedChannel.SetOtherInfo(info)
+			}
+		}
+		parentStatusChanged = beforeStatus != updatedChannel.Status
+
+		return tx.Model(&Channel{}).
+			Where("id = ?", updatedChannel.Id).
+			Select("channel_info", "status", "other_info").
+			Updates(map[string]interface{}{
+				"channel_info": updatedChannel.ChannelInfo,
+				"status":       updatedChannel.Status,
+				"other_info":   updatedChannel.OtherInfo,
+			}).Error
+	})
+	if err != nil {
+		return err
+	}
+
+	*channel = updatedChannel
+	if parentStatusChanged {
+		if err := UpdateAbilityStatus(channel.Id, channel.Status == common.ChannelStatusEnabled); err != nil {
+			return err
+		}
+		CacheUpdateChannelStatus(channel.Id, channel.Status)
+	}
+	return nil
+}
+
+func SetChannelKeyStatus(channel *Channel, keyIndex int, status int, reason string) error {
+	return SetChannelKeyStatuses(channel, []int{keyIndex}, status, reason)
 }
 
 func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
@@ -639,6 +780,11 @@ func ApplyChannelUsageSettlement(params ChannelUsageSettlementParams) (ChannelUs
 
 	recordDaily := params.Quota > 0 || params.TokenUsed > 0 || params.RequestCount > 0
 	recordKeyUsage := params.HasKeyIdentity && strings.TrimSpace(params.SelectedKey) != ""
+	if recordKeyUsage {
+		if _, err := FingerprintChannelKey(params.SelectedKey); err != nil {
+			return result, err
+		}
+	}
 
 	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
 		keyFingerprint := ""

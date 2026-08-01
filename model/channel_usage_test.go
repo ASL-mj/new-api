@@ -855,6 +855,222 @@ func TestUpdateChannelUsedQuotaInBatchModeKeepsUnlimitedChannelsQueued(t *testin
 	assert.Equal(t, 7, queuedValue)
 }
 
+func TestGetChannelExcludesQuotaExceededChannelBeforePrioritySelection(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+	})
+
+	highPriority := int64(100)
+	lowPriority := int64(10)
+	weight := uint(10)
+	exhausted := &Channel{
+		Name:           "exhausted-high-priority",
+		Key:            "sk-exhausted",
+		Status:         common.ChannelStatusEnabled,
+		Priority:       &highPriority,
+		Weight:         &weight,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	available := &Channel{
+		Name:           "available-low-priority",
+		Key:            "sk-available",
+		Status:         common.ChannelStatusEnabled,
+		Priority:       &lowPriority,
+		Weight:         &weight,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 20,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(exhausted).Error)
+	require.NoError(t, exhausted.AddAbilities(nil))
+	require.NoError(t, DB.Create(available).Error)
+	require.NoError(t, available.AddAbilities(nil))
+
+	selected, err := GetChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, available.Id, selected.Id)
+}
+
+func TestMemoryChannelSelectionExcludesQuotaExceededChannelWithStaleEnabledStatus(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelCacheForTest()
+	})
+
+	priority := int64(10)
+	weight := uint(10)
+	channel := &Channel{
+		Name:           "stale-enabled-exhausted",
+		Key:            "sk-stale",
+		Status:         common.ChannelStatusEnabled,
+		Priority:       &priority,
+		Weight:         &weight,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	InitChannelCache()
+	selected, err := GetRandomSatisfiedChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	assert.Nil(t, selected)
+}
+
+func TestChannelEnableGuardsRequireQuotaReset(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:           "enable-guard",
+		Key:            "sk-enable-guard",
+		Status:         common.ChannelStatusAutoDisabled,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	err := channel.CanEnableChannel()
+	require.ErrorIs(t, err, ErrChannelQuotaResetRequired)
+
+	channel.QuotaLimitUsed = 0
+	require.NoError(t, channel.CanEnableChannel())
+
+	usages, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("id = ?", usages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      50,
+			"quota_limit_used": 50,
+			"status":           common.ChannelStatusAutoDisabled,
+		}).Error)
+
+	err = channel.CanEnableChannelKey(0)
+	require.ErrorIs(t, err, ErrChannelKeyQuotaResetRequired)
+	err = channel.CanEnableChannel()
+	require.ErrorIs(t, err, ErrChannelKeyQuotaResetRequired)
+
+	channel.QuotaLimitMode = ChannelQuotaLimitModeChannel
+	require.NoError(t, channel.CanEnableChannelKey(0), "key quota state must not block enable when key limits are disabled")
+}
+
+func TestEnableChannelByTagRejectsAnyExhaustedChannel(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	tag := "quota-guard-tag"
+	channel := &Channel{
+		Name:           "tag-exhausted",
+		Key:            "sk-tag",
+		Status:         common.ChannelStatusAutoDisabled,
+		Tag:            &tag,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 100,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	err := EnableChannelByTag(tag)
+	require.ErrorIs(t, err, ErrChannelQuotaResetRequired)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("quota_limit_used", 0).Error)
+	require.NoError(t, EnableChannelByTag(tag))
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+}
+
+func TestSetChannelKeyStatusesDisablesParentAndPersistsKeyState(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	channel := &Channel{
+		Name:   "manual-key-status-sync",
+		Key:    "sk-alpha\nsk-beta",
+		Status: common.ChannelStatusEnabled,
+		Group:  "default",
+		Models: "gpt-4o-mini",
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+	_, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+
+	require.NoError(t, SetChannelKeyStatuses(
+		channel,
+		[]int{0, 1},
+		common.ChannelStatusManuallyDisabled,
+		"manually disabled",
+	))
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.ChannelInfo.MultiKeyStatusList[0])
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.ChannelInfo.MultiKeyStatusList[1])
+
+	var keyUsages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Order("key_index ASC").Find(&keyUsages).Error)
+	require.Len(t, keyUsages, 2)
+	for _, usage := range keyUsages {
+		assert.Equal(t, common.ChannelStatusManuallyDisabled, usage.Status)
+		assert.Equal(t, "manually disabled", usage.DisabledReason)
+		assert.NotZero(t, usage.DisabledAt)
+	}
+
+	var abilities []Ability
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
+	require.NotEmpty(t, abilities)
+	for _, ability := range abilities {
+		assert.False(t, ability.Enabled)
+	}
+
+	require.NoError(t, SetChannelKeyStatus(channel, 0, common.ChannelStatusEnabled, ""))
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	_, hasStatusReason := reloaded.GetOtherInfo()["status_reason"]
+	assert.False(t, hasStatusReason)
+
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
+	for _, ability := range abilities {
+		assert.True(t, ability.Enabled)
+	}
+}
+
 func TestChannelUsageSQLHelpersAreDialectNeutral(t *testing.T) {
 	incrementSQL, incrementArgs := buildChannelQuotaLimitIncrementExpr(7)
 	disableSQL, disableArgs := buildChannelUsageAutoDisableCondition(123)

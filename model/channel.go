@@ -26,6 +26,11 @@ const (
 	ChannelQuotaLimitModeBoth    = "both"
 )
 
+var (
+	ErrChannelQuotaResetRequired    = errors.New("渠道限额已耗尽，请先重置已用额度后再启用")
+	ErrChannelKeyQuotaResetRequired = errors.New("渠道密钥限额已耗尽，请先重置已用额度后再启用")
+)
+
 type Channel struct {
 	Id                 int     `json:"id"`
 	Type               int     `json:"type" gorm:"default:0"`
@@ -129,6 +134,62 @@ func (channel *Channel) IsChannelQuotaExceeded() bool {
 		return false
 	}
 	return channel.QuotaLimitUsed >= channel.QuotaLimit
+}
+
+func (channel *Channel) CanEnableChannel() error {
+	if channel == nil {
+		return errors.New("channel is nil")
+	}
+	if channel.IsChannelQuotaExceeded() {
+		return ErrChannelQuotaResetRequired
+	}
+	if channel.ChannelInfo.IsMultiKey && channel.UsesKeyQuota() {
+		usages, err := EnsureChannelKeyUsageRecords(channel)
+		if err != nil {
+			return err
+		}
+		hasUsableKey := false
+		hasExhaustedKey := false
+		for _, usage := range usages {
+			if usage == nil {
+				continue
+			}
+			if usage.IsQuotaExceeded() {
+				hasExhaustedKey = true
+				continue
+			}
+			if usage.Status == common.ChannelStatusEnabled {
+				hasUsableKey = true
+				break
+			}
+		}
+		if !hasUsableKey && hasExhaustedKey {
+			return ErrChannelKeyQuotaResetRequired
+		}
+	}
+	return nil
+}
+
+func (channel *Channel) CanEnableChannelKey(keyIndex int) error {
+	if channel == nil {
+		return errors.New("channel is nil")
+	}
+	if !channel.UsesKeyQuota() {
+		return nil
+	}
+
+	usages, err := EnsureChannelKeyUsageRecords(channel)
+	if err != nil {
+		return err
+	}
+	usage, ok := usages[keyIndex]
+	if !ok || usage == nil {
+		return fmt.Errorf("channel key not found: index=%d", keyIndex)
+	}
+	if usage.IsQuotaExceeded() {
+		return fmt.Errorf("%w: key index %d", ErrChannelKeyQuotaResetRequired, keyIndex)
+	}
+	return nil
 }
 
 func (channel *Channel) ResetQuotaLimitUsage(resetAt int64) error {
@@ -717,6 +778,29 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+	if status == common.ChannelStatusEnabled {
+		channel, err := GetChannelById(channelId, true)
+		if err != nil {
+			return false
+		}
+		if err := channel.CanEnableChannel(); err != nil {
+			common.SysLog(fmt.Sprintf("refusing to enable exhausted channel: channel_id=%d, error=%v", channelId, err))
+			return false
+		}
+		if channel.ChannelInfo.IsMultiKey && strings.TrimSpace(usingKey) != "" {
+			for index, key := range channel.GetKeys() {
+				if key != usingKey {
+					continue
+				}
+				if err := channel.CanEnableChannelKey(index); err != nil {
+					common.SysLog(fmt.Sprintf("refusing to enable exhausted channel key: channel_id=%d, key_index=%d, error=%v", channelId, index, err))
+					return false
+				}
+				break
+			}
+		}
+	}
+
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -791,6 +875,16 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
+	var channels []Channel
+	if err := DB.Where("tag = ?", tag).Find(&channels).Error; err != nil {
+		return err
+	}
+	for i := range channels {
+		if err := channels[i].CanEnableChannel(); err != nil {
+			return fmt.Errorf("渠道 #%d（%s）无法启用: %w", channels[i].Id, channels[i].Name, err)
+		}
+	}
+
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
