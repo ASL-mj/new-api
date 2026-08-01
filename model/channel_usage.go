@@ -14,6 +14,12 @@ import (
 
 const ChannelKeyFingerprintSecretOption = "ChannelKeyFingerprintSecret"
 
+const (
+	channelUsageUsedQuotaIncrementSQL   = "used_quota + ?"
+	channelUsageQuotaLimitIncrementSQL  = "quota_limit_used + CASE WHEN quota_limit > 0 AND quota_limit_mode IN ? THEN ? ELSE 0 END"
+	channelUsageAutoDisableConditionSQL = "id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit"
+)
+
 var channelKeyFingerprintSecretState struct {
 	sync.RWMutex
 	value string
@@ -85,14 +91,7 @@ func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error
 		if quota > 0 {
 			updateResult := tx.Model(&Channel{}).
 				Where("id = ?", channelID).
-				Updates(map[string]interface{}{
-					"used_quota": gorm.Expr("used_quota + ?", quota),
-					"quota_limit_used": gorm.Expr(
-						"quota_limit_used + CASE WHEN quota_limit > 0 AND quota_limit_mode IN ? THEN ? ELSE 0 END",
-						[]string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth},
-						quota,
-					),
-				})
+				Updates(buildChannelUsageUpdates(quota))
 			if updateResult.Error != nil {
 				return updateResult.Error
 			}
@@ -100,13 +99,9 @@ func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error
 				return gorm.ErrRecordNotFound
 			}
 
+			disableConditionSQL, disableConditionArgs := buildChannelUsageAutoDisableCondition(channelID)
 			statusUpdateResult := tx.Model(&Channel{}).
-				Where(
-					"id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit",
-					channelID,
-					common.ChannelStatusEnabled,
-					[]string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth},
-				).
+				Where(disableConditionSQL, disableConditionArgs...).
 				Update("status", common.ChannelStatusAutoDisabled)
 			if statusUpdateResult.Error != nil {
 				return statusUpdateResult.Error
@@ -128,6 +123,58 @@ func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error
 	})
 
 	return result, err
+}
+
+func buildChannelUsageUpdates(quota int) map[string]interface{} {
+	quotaLimitExprSQL, quotaLimitExprArgs := buildChannelQuotaLimitIncrementExpr(quota)
+	return map[string]interface{}{
+		"used_quota":       gorm.Expr(channelUsageUsedQuotaIncrementSQL, quota),
+		"quota_limit_used": gorm.Expr(quotaLimitExprSQL, quotaLimitExprArgs...),
+	}
+}
+
+func buildChannelQuotaLimitIncrementExpr(quota int) (string, []interface{}) {
+	return channelUsageQuotaLimitIncrementSQL, []interface{}{channelUsageQuotaLimitModes(), quota}
+}
+
+func buildChannelUsageAutoDisableCondition(channelID int) (string, []interface{}) {
+	return channelUsageAutoDisableConditionSQL, []interface{}{
+		channelID,
+		common.ChannelStatusEnabled,
+		channelUsageQuotaLimitModes(),
+	}
+}
+
+func channelUsageQuotaLimitModes() []string {
+	return []string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth}
+}
+
+func applyChannelUsageAndPropagate(channelID int, quota int) error {
+	result, err := ApplyChannelUsage(channelID, quota)
+	if err != nil {
+		return err
+	}
+	if !result.ChannelJustExhausted {
+		return nil
+	}
+	if err := UpdateAbilityStatus(channelID, false); err != nil {
+		common.SysLog(fmt.Sprintf("failed to disable abilities for exhausted channel: channel_id=%d, error=%v", channelID, err))
+	}
+	CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
+	return nil
+}
+
+func shouldBatchChannelUsedQuotaUpdate(channelID int) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database not initialized")
+	}
+
+	var channel Channel
+	if err := DB.Select("quota_limit_mode", "quota_limit").First(&channel, channelID).Error; err != nil {
+		return false, err
+	}
+
+	return !(channel.UsesChannelQuota() && channel.QuotaLimit > 0), nil
 }
 
 func getChannelKeyFingerprintSecret() (string, error) {

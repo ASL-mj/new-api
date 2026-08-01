@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -84,6 +87,28 @@ func prepareConcurrentChannelUsageTable(t *testing.T) {
 		_ = sqlDB.Close()
 		modelTestDBMutex.Unlock()
 	})
+}
+
+func resetBatchUpdateStoresForTest() {
+	for i := 0; i < BatchUpdateTypeCount; i++ {
+		batchUpdateLocks[i].Lock()
+		batchUpdateStores[i] = make(map[int]int)
+		batchUpdateLocks[i].Unlock()
+	}
+}
+
+func getBatchUpdateStoreValueForTest(type_ int, id int) (int, bool) {
+	batchUpdateLocks[type_].Lock()
+	defer batchUpdateLocks[type_].Unlock()
+	value, ok := batchUpdateStores[type_][id]
+	return value, ok
+}
+
+func resetChannelCacheForTest() {
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	group2model2channels = nil
+	channelsIDM = nil
 }
 
 func prepareChannelUsageMigrationDB(t *testing.T) {
@@ -470,6 +495,263 @@ func TestApplyChannelUsageConcurrentExhaustionHasSingleWinner(t *testing.T) {
 	assert.EqualValues(t, 120, reloaded.UsedQuota)
 	assert.EqualValues(t, 120, reloaded.QuotaLimitUsed)
 	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+}
+
+func TestUpdateChannelUsedQuotaPropagatesAutoDisableToAbilitiesAndCache(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.MemoryCacheEnabled = true
+	common.BatchUpdateEnabled = false
+	resetChannelCacheForTest()
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		common.BatchUpdateEnabled = previousBatchUpdateEnabled
+		resetChannelCacheForTest()
+	})
+
+	channel := &Channel{
+		Name:           "channel-usage-propagation",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      90,
+		QuotaLimitMode: ChannelQuotaLimitModeChannel,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 90,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	InitChannelCache()
+	cachedBefore, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusEnabled, cachedBefore.Status)
+	selectedBefore, err := GetRandomSatisfiedChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	require.NotNil(t, selectedBefore)
+	assert.Equal(t, channel.Id, selectedBefore.Id)
+
+	UpdateChannelUsedQuota(channel.Id, 15)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 105, reloaded.UsedQuota)
+	assert.EqualValues(t, 105, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+
+	var abilities []Ability
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
+	require.NotEmpty(t, abilities)
+	for _, ability := range abilities {
+		assert.False(t, ability.Enabled)
+	}
+
+	cachedAfter, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, cachedAfter.Status)
+	selectedAfter, err := GetRandomSatisfiedChannel("default", "gpt-4o-mini", 0)
+	require.NoError(t, err)
+	assert.Nil(t, selectedAfter)
+}
+
+func TestUpdateChannelUsedQuotaInBatchModeAppliesLimitedChannelsImmediately(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.BatchUpdateEnabled = true
+	resetBatchUpdateStoresForTest()
+	t.Cleanup(func() {
+		common.BatchUpdateEnabled = previousBatchUpdateEnabled
+		resetBatchUpdateStoresForTest()
+	})
+
+	channel := &Channel{
+		Name:           "channel-usage-batch-limited",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      90,
+		QuotaLimitMode: ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 90,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	UpdateChannelUsedQuota(channel.Id, 15)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 105, reloaded.UsedQuota)
+	assert.EqualValues(t, 105, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+
+	var abilities []Ability
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
+	require.NotEmpty(t, abilities)
+	for _, ability := range abilities {
+		assert.False(t, ability.Enabled)
+	}
+
+	_, queued := getBatchUpdateStoreValueForTest(BatchUpdateTypeChannelUsedQuota, channel.Id)
+	assert.False(t, queued)
+}
+
+func TestUpdateChannelUsedQuotaInBatchModeKeepsUnlimitedChannelsQueued(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.BatchUpdateEnabled = true
+	resetBatchUpdateStoresForTest()
+	t.Cleanup(func() {
+		common.BatchUpdateEnabled = previousBatchUpdateEnabled
+		resetBatchUpdateStoresForTest()
+	})
+
+	channel := &Channel{
+		Name:           "channel-usage-batch-unlimited",
+		Key:            "test-key",
+		Status:         common.ChannelStatusEnabled,
+		UsedQuota:      10,
+		QuotaLimitMode: ChannelQuotaLimitModeNone,
+		QuotaLimit:     100,
+		QuotaLimitUsed: 4,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	UpdateChannelUsedQuota(channel.Id, 7)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 10, reloaded.UsedQuota)
+	assert.EqualValues(t, 4, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	queuedValue, queued := getBatchUpdateStoreValueForTest(BatchUpdateTypeChannelUsedQuota, channel.Id)
+	require.True(t, queued)
+	assert.Equal(t, 7, queuedValue)
+}
+
+func TestChannelUsageSQLHelpersAreDialectNeutral(t *testing.T) {
+	incrementSQL, incrementArgs := buildChannelQuotaLimitIncrementExpr(7)
+	disableSQL, disableArgs := buildChannelUsageAutoDisableCondition(123)
+
+	testCases := []struct {
+		name string
+		sql  string
+	}{
+		{name: "increment", sql: incrementSQL},
+		{name: "disable", sql: disableSQL},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			upperSQL := strings.ToUpper(tc.sql)
+			assert.NotContains(t, upperSQL, "RETURNING")
+			assert.NotContains(t, upperSQL, "JSONB")
+			assert.NotContains(t, tc.sql, "`")
+			assert.NotContains(t, tc.sql, "\"")
+			assert.NotContains(t, tc.sql, "::")
+		})
+	}
+
+	assert.Contains(t, incrementSQL, "CASE WHEN")
+	assert.Contains(t, incrementSQL, "quota_limit_mode IN ?")
+	assert.Equal(t, []interface{}{[]string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth}, 7}, incrementArgs)
+
+	assert.Contains(t, disableSQL, "status = ?")
+	assert.Contains(t, disableSQL, "quota_limit_used >= quota_limit")
+	require.Len(t, disableArgs, 3)
+	assert.Equal(t, 123, disableArgs[0])
+	assert.Equal(t, common.ChannelStatusEnabled, disableArgs[1])
+	assert.Equal(t, []string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth}, disableArgs[2])
+}
+
+func TestChannelUsageDryRunSQLAcrossDialectors(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		open        func(*sql.DB) (*gorm.DB, error)
+		wantQuote   string
+		wantBindVar string
+	}{
+		{
+			name: "sqlite",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(sqlite.Dialector{Conn: conn}, &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channels`",
+			wantBindVar: "?",
+		},
+		{
+			name: "mysql",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(mysql.New(mysql.Config{
+					Conn:                      conn,
+					SkipInitializeWithVersion: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channels`",
+			wantBindVar: "?",
+		},
+		{
+			name: "postgres",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{
+					Conn:             conn,
+					WithoutReturning: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "\"channels\"",
+			wantBindVar: "$",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dryRunDB, err := tc.open(sqlDB)
+			require.NoError(t, err)
+
+			updateStmt := dryRunDB.Model(&Channel{}).
+				Where("id = ?", 123).
+				Updates(buildChannelUsageUpdates(7)).Statement
+			updateSQL := updateStmt.SQL.String()
+			updateSQLUpper := strings.ToUpper(updateSQL)
+
+			assert.Contains(t, updateSQL, tc.wantQuote)
+			assert.Contains(t, updateSQL, "CASE WHEN")
+			assert.Contains(t, updateSQLUpper, "UPDATE")
+			assert.Contains(t, updateSQLUpper, "SET")
+			assert.NotContains(t, updateSQLUpper, "RETURNING")
+			assert.NotContains(t, updateSQLUpper, "JSONB")
+			assert.Contains(t, updateSQL, tc.wantBindVar)
+			assert.NotEmpty(t, updateStmt.Vars)
+
+			disableConditionSQL, disableConditionArgs := buildChannelUsageAutoDisableCondition(123)
+			disableStmt := dryRunDB.Model(&Channel{}).
+				Where(disableConditionSQL, disableConditionArgs...).
+				Update("status", common.ChannelStatusAutoDisabled).Statement
+			disableSQL := disableStmt.SQL.String()
+			disableSQLUpper := strings.ToUpper(disableSQL)
+
+			assert.Contains(t, disableSQL, tc.wantQuote)
+			assert.Contains(t, disableSQLUpper, "QUOTA_LIMIT_USED >= QUOTA_LIMIT")
+			assert.NotContains(t, disableSQLUpper, "RETURNING")
+			assert.NotContains(t, disableSQLUpper, "JSONB")
+			assert.Contains(t, disableSQL, tc.wantBindVar)
+			assert.NotEmpty(t, disableStmt.Vars)
+		})
+	}
 }
 
 func applyChannelUsageWithRetry(channelID int, quota int) (ChannelUsageApplyResult, error) {

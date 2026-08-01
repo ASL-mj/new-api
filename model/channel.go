@@ -836,14 +836,19 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 
 func UpdateChannelUsedQuota(id int, quota int) {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeChannelUsedQuota, id, quota)
-		return
+		shouldBatch, err := shouldBatchChannelUsedQuotaUpdate(id)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to inspect channel quota batching mode: channel_id=%d, delta_quota=%d, error=%v", id, quota, err))
+		} else if shouldBatch {
+			addNewRecord(BatchUpdateTypeChannelUsedQuota, id, quota)
+			return
+		}
 	}
 	updateChannelUsedQuota(id, quota)
 }
 
 func updateChannelUsedQuota(id int, quota int) {
-	_, err := ApplyChannelUsage(id, quota)
+	err := applyChannelUsageAndPropagate(id, quota)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to update channel used quota: channel_id=%d, delta_quota=%d, error=%v", id, quota, err))
 	}
