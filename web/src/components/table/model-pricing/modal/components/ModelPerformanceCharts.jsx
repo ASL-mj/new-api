@@ -38,7 +38,6 @@ const CHART_CONFIG = { mode: 'desktop-browser' };
 
 const getAvailabilityAxisMin = (points) => {
   const values = points
-    .filter((point) => point.has_data)
     .map((point) => Number(point.success_rate))
     .filter(Number.isFinite);
   if (values.length === 0) return 95;
@@ -126,9 +125,7 @@ const ModelPerformanceCharts = ({ series = [], groupSeries = [], t }) => {
       { orient: 'bottom', label: { visible: true } },
       {
         orient: 'left',
-        min: getAvailabilityAxisMin(
-          availabilityData.map((point) => ({ ...point, has_data: true })),
-        ),
+        min: getAvailabilityAxisMin(availabilityData),
         max: 100,
         label: {
           visible: true,

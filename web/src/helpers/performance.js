@@ -184,11 +184,10 @@ export function buildPerformanceChartSeries(groups = []) {
   for (const group of groups) {
     for (const point of group?.series || []) {
       const ts = Number(point?.ts);
-      const requestCount = Number(point?.request_count);
-      if (!Number.isFinite(ts) || ts <= 0 || requestCount <= 0) continue;
+      if (!Number.isFinite(ts) || ts <= 0) continue;
 
       const ttft = Number(point?.avg_ttft_ms);
-      if (Number.isFinite(ttft) && ttft > 0) {
+      if (Number.isFinite(ttft) && ttft >= 0) {
         const values = latencyByTs.get(ts) || [];
         values.push(ttft);
         latencyByTs.set(ts, values);

@@ -107,7 +107,7 @@ describe('model card performance formatting', () => {
     ).toBe(1);
   });
 
-  test('builds chart points only from real group buckets', () => {
+  test('keeps all hourly buckets when building chart points like newer NewAPI', () => {
     const charts = buildPerformanceChartSeries([
       {
         series: [
@@ -124,10 +124,12 @@ describe('model card performance formatting', () => {
     ]);
 
     expect(charts.latency).toEqual([
+      { ts: 100, avg_ttft_ms: 0 },
       { ts: 200, avg_ttft_ms: 2000 },
       { ts: 300, avg_ttft_ms: 500 },
     ]);
     expect(charts.availability).toEqual([
+      { ts: 100, success_rate: 0 },
       { ts: 200, success_rate: 90 },
       { ts: 300, success_rate: 50 },
     ]);
