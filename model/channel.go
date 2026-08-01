@@ -760,10 +760,6 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	if err != nil {
 		return false
 	} else {
-		if channel.Status == status {
-			return false
-		}
-
 		if channel.ChannelInfo.IsMultiKey {
 			beforeStatus := channel.Status
 			// Protect map writes with the same per-channel lock used by readers
@@ -775,6 +771,9 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 				shouldUpdateAbilities = true
 			}
 		} else {
+			if channel.Status == status {
+				return false
+			}
 			info := channel.GetOtherInfo()
 			info["status_reason"] = reason
 			info["status_time"] = common.GetTimestamp()
@@ -876,6 +875,10 @@ func UpdateChannelUsedQuota(id int, quota int) {
 		}
 	}
 	updateChannelUsedQuota(id, quota)
+}
+
+func ApplyChannelUsedQuotaWithBatch(id int, quota int) {
+	UpdateChannelUsedQuota(id, quota)
 }
 
 func updateChannelUsedQuota(id int, quota int) {

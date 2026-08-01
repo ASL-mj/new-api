@@ -22,7 +22,7 @@ const (
 	channelUsageAutoDisableConditionSQL    = "id = ? AND status = ? AND quota_limit > 0 AND quota_limit_mode IN ? AND quota_limit_used >= quota_limit"
 	channelKeyUsageQuotaLimitIncrementSQL  = "quota_limit_used + CASE WHEN quota_limit > 0 THEN ? ELSE 0 END"
 	channelKeyUsageAutoDisableConditionSQL = "channel_id = ? AND key_fingerprint = ? AND status = ? AND quota_limit > 0 AND quota_limit_used >= quota_limit"
-	channelKeyQuotaDisabledReason          = "key quota limit reached"
+	ChannelKeyQuotaDisabledReason          = "key quota limit reached"
 )
 
 var channelKeyFingerprintSecretState struct {
@@ -120,6 +120,22 @@ type ChannelKeyUsageApplyResult struct {
 	ChannelJustExhausted bool
 }
 
+type ChannelUsageSettlementParams struct {
+	ChannelID      int
+	SelectedKey    string
+	KeyIndex       int
+	HasKeyIdentity bool
+	Quota          int
+	TokenUsed      int64
+	RequestCount   int64
+	Now            time.Time
+}
+
+type ChannelUsageSettlementResult struct {
+	Channel ChannelUsageApplyResult
+	Key     *ChannelKeyUsageApplyResult
+}
+
 func (usage ChannelKeyUsage) IsQuotaExceeded() bool {
 	if usage.QuotaLimit <= 0 {
 		return false
@@ -134,38 +150,12 @@ func RecordChannelUsageDaily(channelID int, keyFingerprint string, quota int64, 
 	if channelID <= 0 {
 		return errors.New("invalid channel id")
 	}
-
-	usageDate, err := channelUsageDateFromTime(now)
-	if err != nil {
-		return err
-	}
 	if now.IsZero() {
 		now = time.Now()
 	}
-	updatedAt := now.Unix()
 
-	summaryDelta := ChannelUsageDaily{
-		ChannelId:      channelID,
-		KeyFingerprint: "",
-		UsageDate:      usageDate,
-		Quota:          quota,
-		TokenUsed:      tokenUsed,
-		RequestCount:   requestCount,
-		UpdatedAt:      updatedAt,
-	}
-
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if _, err := UpsertChannelUsageDaily(tx, summaryDelta); err != nil {
-			return err
-		}
-		if keyFingerprint == "" {
-			return nil
-		}
-
-		keyDelta := summaryDelta
-		keyDelta.KeyFingerprint = keyFingerprint
-		_, err := UpsertChannelUsageDaily(tx, keyDelta)
-		return err
+	return runChannelUsageTransaction(func(tx *gorm.DB) error {
+		return recordChannelUsageDailyTx(tx, channelID, keyFingerprint, quota, tokenUsed, requestCount, now)
 	})
 }
 
@@ -264,39 +254,10 @@ func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error
 		return result, errors.New("database not initialized")
 	}
 
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if quota > 0 {
-			updateResult := tx.Model(&Channel{}).
-				Where("id = ?", channelID).
-				Updates(buildChannelUsageUpdates(quota))
-			if updateResult.Error != nil {
-				return updateResult.Error
-			}
-			if updateResult.RowsAffected == 0 {
-				return gorm.ErrRecordNotFound
-			}
-
-			disableConditionSQL, disableConditionArgs := buildChannelUsageAutoDisableCondition(channelID)
-			statusUpdateResult := tx.Model(&Channel{}).
-				Where(disableConditionSQL, disableConditionArgs...).
-				Update("status", common.ChannelStatusAutoDisabled)
-			if statusUpdateResult.Error != nil {
-				return statusUpdateResult.Error
-			}
-			result.ChannelJustExhausted = statusUpdateResult.RowsAffected == 1
-		}
-
-		var channel Channel
-		if err := tx.Select("used_quota", "quota_limit_used", "quota_limit", "status").
-			First(&channel, channelID).Error; err != nil {
-			return err
-		}
-
-		result.UsedQuota = channel.UsedQuota
-		result.QuotaLimitUsed = channel.QuotaLimitUsed
-		result.QuotaLimit = channel.QuotaLimit
-		result.Status = channel.Status
-		return nil
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		var err error
+		result, err = applyChannelUsageTx(tx, channelID, quota)
+		return err
 	})
 
 	return result, err
@@ -611,7 +572,16 @@ func ensureChannelKeyUsageRecords(tx *gorm.DB, channel *Channel) (map[int]*Chann
 }
 
 func EnsureChannelKeyUsageRecords(channel *Channel) (map[int]*ChannelKeyUsage, error) {
-	return ensureChannelKeyUsageRecords(DB, channel)
+	if DB == nil {
+		return nil, errors.New("database not initialized")
+	}
+	var currentUsages map[int]*ChannelKeyUsage
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		var err error
+		currentUsages, err = ensureChannelKeyUsageRecords(tx, channel)
+		return err
+	})
+	return currentUsages, err
 }
 
 func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
@@ -623,7 +593,157 @@ func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, qu
 		return result, errors.New("database not initialized")
 	}
 
-	currentUsages, err := EnsureChannelKeyUsageRecords(channel)
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		var err error
+		result, err = applyChannelKeyUsageTx(tx, channel, selectedKey, keyIndex, quota)
+		return err
+	})
+	if err != nil {
+		return result, err
+	}
+
+	if !result.KeyJustExhausted {
+		return result, nil
+	}
+
+	UpdateChannelStatus(channel.Id, selectedKey, common.ChannelStatusAutoDisabled, ChannelKeyQuotaDisabledReason)
+
+	var refreshedChannel Channel
+	if err := DB.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
+		return result, err
+	}
+	result.ChannelStatus = refreshedChannel.Status
+	result.ChannelJustExhausted = refreshedChannel.Status == common.ChannelStatusAutoDisabled
+	return result, nil
+}
+
+func ApplyChannelUsageSettlement(params ChannelUsageSettlementParams) (ChannelUsageSettlementResult, error) {
+	var result ChannelUsageSettlementResult
+	if DB == nil {
+		return result, errors.New("database not initialized")
+	}
+	if params.ChannelID <= 0 {
+		return result, errors.New("invalid channel id")
+	}
+	if params.Quota < 0 {
+		params.Quota = 0
+	}
+	if params.TokenUsed < 0 {
+		params.TokenUsed = 0
+	}
+	if params.RequestCount < 0 {
+		params.RequestCount = 0
+	}
+	if params.Now.IsZero() {
+		params.Now = time.Now()
+	}
+
+	recordDaily := params.Quota > 0 || params.TokenUsed > 0 || params.RequestCount > 0
+	recordKeyUsage := params.HasKeyIdentity && strings.TrimSpace(params.SelectedKey) != ""
+
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		keyFingerprint := ""
+		if params.Quota > 0 {
+			channelResult, err := applyChannelUsageTx(tx, params.ChannelID, params.Quota)
+			if err != nil {
+				return err
+			}
+			result.Channel = channelResult
+		}
+
+		if recordKeyUsage && params.Quota > 0 {
+			var channel Channel
+			if err := tx.First(&channel, params.ChannelID).Error; err != nil {
+				return err
+			}
+			keyResult, err := applyChannelKeyUsageTx(tx, &channel, params.SelectedKey, params.KeyIndex, params.Quota)
+			if err != nil {
+				return err
+			}
+			result.Key = &keyResult
+			keyFingerprint = keyResult.KeyFingerprint
+		} else if recordKeyUsage {
+			fingerprint, err := FingerprintChannelKey(params.SelectedKey)
+			if err != nil {
+				return err
+			}
+			keyFingerprint = fingerprint
+		}
+
+		if !recordDaily {
+			return nil
+		}
+
+		return recordChannelUsageDailyTx(tx, params.ChannelID, keyFingerprint, int64(params.Quota), params.TokenUsed, params.RequestCount, params.Now)
+	})
+	return result, err
+}
+
+func applyChannelUsageAndPropagate(channelID int, quota int) error {
+	result, err := ApplyChannelUsage(channelID, quota)
+	if err != nil {
+		return err
+	}
+	if !result.ChannelJustExhausted {
+		return nil
+	}
+	if err := UpdateAbilityStatus(channelID, false); err != nil {
+		common.SysLog(fmt.Sprintf("failed to disable abilities for exhausted channel: channel_id=%d, error=%v", channelID, err))
+	}
+	CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
+	return nil
+}
+
+func applyChannelUsageTx(tx *gorm.DB, channelID int, quota int) (ChannelUsageApplyResult, error) {
+	var result ChannelUsageApplyResult
+	if tx == nil {
+		return result, errors.New("transaction is required")
+	}
+
+	if quota > 0 {
+		updateResult := tx.Model(&Channel{}).
+			Where("id = ?", channelID).
+			Updates(buildChannelUsageUpdates(quota))
+		if updateResult.Error != nil {
+			return result, updateResult.Error
+		}
+		if updateResult.RowsAffected == 0 {
+			return result, gorm.ErrRecordNotFound
+		}
+
+		disableConditionSQL, disableConditionArgs := buildChannelUsageAutoDisableCondition(channelID)
+		statusUpdateResult := tx.Model(&Channel{}).
+			Where(disableConditionSQL, disableConditionArgs...).
+			Update("status", common.ChannelStatusAutoDisabled)
+		if statusUpdateResult.Error != nil {
+			return result, statusUpdateResult.Error
+		}
+		result.ChannelJustExhausted = statusUpdateResult.RowsAffected == 1
+	}
+
+	var channel Channel
+	if err := tx.Select("used_quota", "quota_limit_used", "quota_limit", "status").
+		First(&channel, channelID).Error; err != nil {
+		return result, err
+	}
+
+	result.UsedQuota = channel.UsedQuota
+	result.QuotaLimitUsed = channel.QuotaLimitUsed
+	result.QuotaLimit = channel.QuotaLimit
+	result.Status = channel.Status
+	return result, nil
+}
+
+func applyChannelKeyUsageTx(tx *gorm.DB, channel *Channel, selectedKey string, keyIndex int, quota int) (ChannelKeyUsageApplyResult, error) {
+	var result ChannelKeyUsageApplyResult
+	if tx == nil {
+		return result, errors.New("transaction is required")
+	}
+	if channel == nil {
+		return result, errors.New("channel is nil")
+	}
+
+	currentUsages, err := ensureChannelKeyUsageRecords(tx, channel)
 	if err != nil {
 		return result, err
 	}
@@ -651,84 +771,90 @@ func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, qu
 	result.KeyFingerprint = fingerprint
 	result.KeyIndex = usage.KeyIndex
 
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		if quota > 0 && channel.UsesKeyQuota() {
-			updateResult := tx.Model(&ChannelKeyUsage{}).
-				Where("channel_id = ? AND key_fingerprint = ?", channel.Id, fingerprint).
-				Updates(buildChannelKeyUsageUpdates(quota))
-			if updateResult.Error != nil {
-				return updateResult.Error
-			}
-			if updateResult.RowsAffected == 0 {
-				return gorm.ErrRecordNotFound
-			}
-
-			disableConditionSQL, disableConditionArgs := buildChannelKeyUsageAutoDisableCondition(channel.Id, fingerprint)
-			statusUpdateResult := tx.Model(&ChannelKeyUsage{}).
-				Where(disableConditionSQL, disableConditionArgs...).
-				Updates(map[string]interface{}{
-					"status":          common.ChannelStatusAutoDisabled,
-					"disabled_reason": channelKeyQuotaDisabledReason,
-					"disabled_at":     common.GetTimestamp(),
-				})
-			if statusUpdateResult.Error != nil {
-				return statusUpdateResult.Error
-			}
-			result.KeyJustExhausted = statusUpdateResult.RowsAffected == 1
-		}
-
-		var refreshedUsage ChannelKeyUsage
-		if err := tx.Select("key_fingerprint", "key_index", "quota_limit_used", "quota_limit", "status").
+	if quota > 0 && channel.UsesKeyQuota() {
+		updateResult := tx.Model(&ChannelKeyUsage{}).
 			Where("channel_id = ? AND key_fingerprint = ?", channel.Id, fingerprint).
-			First(&refreshedUsage).Error; err != nil {
-			return err
+			Updates(buildChannelKeyUsageUpdates(quota))
+		if updateResult.Error != nil {
+			return result, updateResult.Error
+		}
+		if updateResult.RowsAffected == 0 {
+			return result, gorm.ErrRecordNotFound
 		}
 
-		var refreshedChannel Channel
-		if err := tx.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
-			return err
+		disableConditionSQL, disableConditionArgs := buildChannelKeyUsageAutoDisableCondition(channel.Id, fingerprint)
+		statusUpdateResult := tx.Model(&ChannelKeyUsage{}).
+			Where(disableConditionSQL, disableConditionArgs...).
+			Updates(map[string]interface{}{
+				"status":          common.ChannelStatusAutoDisabled,
+				"disabled_reason": ChannelKeyQuotaDisabledReason,
+				"disabled_at":     common.GetTimestamp(),
+			})
+		if statusUpdateResult.Error != nil {
+			return result, statusUpdateResult.Error
 		}
+		result.KeyJustExhausted = statusUpdateResult.RowsAffected == 1
+	}
 
-		result.KeyFingerprint = refreshedUsage.KeyFingerprint
-		result.KeyIndex = refreshedUsage.KeyIndex
-		result.QuotaLimitUsed = refreshedUsage.QuotaLimitUsed
-		result.QuotaLimit = refreshedUsage.QuotaLimit
-		result.Status = refreshedUsage.Status
-		result.ChannelStatus = refreshedChannel.Status
-		return nil
-	})
-	if err != nil {
+	var refreshedUsage ChannelKeyUsage
+	if err := tx.Select("key_fingerprint", "key_index", "quota_limit_used", "quota_limit", "status").
+		Where("channel_id = ? AND key_fingerprint = ?", channel.Id, fingerprint).
+		First(&refreshedUsage).Error; err != nil {
 		return result, err
 	}
-
-	if !result.KeyJustExhausted {
-		return result, nil
-	}
-
-	UpdateChannelStatus(channel.Id, selectedKey, common.ChannelStatusAutoDisabled, channelKeyQuotaDisabledReason)
 
 	var refreshedChannel Channel
-	if err := DB.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
+	if err := tx.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
 		return result, err
 	}
+
+	result.KeyFingerprint = refreshedUsage.KeyFingerprint
+	result.KeyIndex = refreshedUsage.KeyIndex
+	result.QuotaLimitUsed = refreshedUsage.QuotaLimitUsed
+	result.QuotaLimit = refreshedUsage.QuotaLimit
+	result.Status = refreshedUsage.Status
 	result.ChannelStatus = refreshedChannel.Status
-	result.ChannelJustExhausted = refreshedChannel.Status == common.ChannelStatusAutoDisabled
 	return result, nil
 }
 
-func applyChannelUsageAndPropagate(channelID int, quota int) error {
-	result, err := ApplyChannelUsage(channelID, quota)
+func recordChannelUsageDailyTx(tx *gorm.DB, channelID int, keyFingerprint string, quota int64, tokenUsed int64, requestCount int64, now time.Time) error {
+	if tx == nil {
+		return errors.New("transaction is required")
+	}
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	usageDate, err := channelUsageDateFromTime(now)
 	if err != nil {
 		return err
 	}
-	if !result.ChannelJustExhausted {
+	updatedAt := now.Unix()
+
+	summaryDelta := ChannelUsageDaily{
+		ChannelId:      channelID,
+		KeyFingerprint: "",
+		UsageDate:      usageDate,
+		Quota:          quota,
+		TokenUsed:      tokenUsed,
+		RequestCount:   requestCount,
+		UpdatedAt:      updatedAt,
+	}
+
+	if _, err := UpsertChannelUsageDaily(tx, summaryDelta); err != nil {
+		return err
+	}
+	if keyFingerprint == "" {
 		return nil
 	}
-	if err := UpdateAbilityStatus(channelID, false); err != nil {
-		common.SysLog(fmt.Sprintf("failed to disable abilities for exhausted channel: channel_id=%d, error=%v", channelID, err))
-	}
-	CacheUpdateChannelStatus(channelID, common.ChannelStatusAutoDisabled)
-	return nil
+
+	keyDelta := summaryDelta
+	keyDelta.KeyFingerprint = keyFingerprint
+	_, err = UpsertChannelUsageDaily(tx, keyDelta)
+	return err
 }
 
 func shouldBatchChannelUsedQuotaUpdate(channelID int) (bool, error) {
@@ -742,6 +868,40 @@ func shouldBatchChannelUsedQuotaUpdate(channelID int) (bool, error) {
 	}
 
 	return !(channel.UsesChannelQuota() && channel.QuotaLimit > 0), nil
+}
+
+func runChannelUsageTransaction(fn func(tx *gorm.DB) error) error {
+	if DB == nil {
+		return errors.New("database not initialized")
+	}
+	if !isSQLiteDialector(DB) {
+		return DB.Transaction(fn)
+	}
+
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = DB.Transaction(fn)
+		if err == nil || !isRetryableSQLiteBusyError(err) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+
+	return err
+}
+
+func isSQLiteDialector(db *gorm.DB) bool {
+	return db != nil && strings.EqualFold(db.Dialector.Name(), common.DatabaseTypeSQLite)
+}
+
+func isRetryableSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "sqlite_busy")
 }
 
 func readChannelUsageDailyFresh(tx *gorm.DB, delta ChannelUsageDaily) (ChannelUsageDaily, error) {

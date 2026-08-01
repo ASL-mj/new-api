@@ -233,6 +233,17 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	}
 }
 
+func (info *RelayInfo) GetChannelUsageIdentity() (selectedKey string, keyIndex int, ok bool) {
+	if info == nil || info.ChannelMeta == nil {
+		return "", 0, false
+	}
+	selectedKey = strings.TrimSpace(info.ApiKey)
+	if selectedKey == "" {
+		return "", 0, false
+	}
+	return selectedKey, info.ChannelMultiKeyIndex, true
+}
+
 func (info *RelayInfo) ToString() string {
 	if info == nil {
 		return "RelayInfo<nil>"

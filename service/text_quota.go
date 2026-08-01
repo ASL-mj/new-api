@@ -365,7 +365,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
-		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
+		if err := RecordRelayChannelUsage(relayInfo, summary.Quota, int64(summary.TotalTokens), 1); err != nil {
+			logger.LogError(ctx, "error recording channel usage: "+err.Error())
+		}
 	}
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {

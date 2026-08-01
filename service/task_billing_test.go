@@ -32,9 +32,11 @@ func TestMain(m *testing.M) {
 	model.LOG_DB = db
 
 	common.UsingSQLite = true
+	common.CryptoSecret = "service-test-channel-usage-secret"
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
+	_ = os.Setenv("CRYPTO_SECRET", common.CryptoSecret)
 
 	if err := db.AutoMigrate(
 		&model.Task{},
@@ -42,6 +44,11 @@ func TestMain(m *testing.M) {
 		&model.Token{},
 		&model.Log{},
 		&model.Channel{},
+		&model.Ability{},
+		&model.Option{},
+		&model.ChannelKeyUsage{},
+		&model.ChannelUsageDaily{},
+		&model.SystemEventLog{},
 		&model.TopUp{},
 		&model.UserSubscription{},
 	); err != nil {
@@ -63,6 +70,11 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
 		model.DB.Exec("DELETE FROM channels")
+		model.DB.Exec("DELETE FROM abilities")
+		model.DB.Exec("DELETE FROM options")
+		model.DB.Exec("DELETE FROM channel_key_usages")
+		model.DB.Exec("DELETE FROM channel_usage_daily")
+		model.DB.Exec("DELETE FROM system_event_logs")
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
 	})

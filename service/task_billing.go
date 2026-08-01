@@ -61,7 +61,17 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Other:     other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	if err := RecordChannelUsage(ChannelUsageRecordParams{
+		ChannelID:      info.ChannelId,
+		Quota:          info.PriceData.Quota,
+		RequestCount:   1,
+		ModelName:      info.OriginModelName,
+		Group:          info.UsingGroup,
+		RequestID:      info.RequestId,
+		HasKeyIdentity: false,
+	}); err != nil {
+		logger.LogError(c, "error recording channel usage: "+err.Error())
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +232,16 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		logType = model.LogTypeConsume
 		logQuota = quotaDelta
 		model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
-		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+		if err := RecordChannelUsage(ChannelUsageRecordParams{
+			ChannelID:      task.ChannelId,
+			Quota:          quotaDelta,
+			RequestCount:   0,
+			ModelName:      taskModelName(task),
+			Group:          task.Group,
+			HasKeyIdentity: false,
+		}); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("error recording channel usage for task %s: %s", task.TaskID, err.Error()))
+		}
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
