@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -336,6 +339,71 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeConsume, log.Type)
 	assert.Equal(t, actualQuota-preConsumed, log.Quota)
+
+	var keyUsageCount int64
+	require.NoError(t, model.DB.Model(&model.ChannelKeyUsage{}).Where("channel_id = ?", channelID).Count(&keyUsageCount).Error)
+	assert.Zero(t, keyUsageCount, "offline task recalculation must not invent a key identity")
+
+	var daily model.ChannelUsageDaily
+	require.NoError(t, model.DB.Where("channel_id = ? AND key_fingerprint = ?", channelID, "").First(&daily).Error)
+	assert.EqualValues(t, actualQuota-preConsumed, daily.Quota)
+}
+
+func TestLogTaskConsumptionRecordsSelectedChannelKey(t *testing.T) {
+	truncate(t)
+
+	const userID, channelID = 19, 19
+	seedUser(t, userID, 10000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-submit-key",
+		Key:            "sk-task-submit",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     1000,
+		Group:          "default",
+		Models:         "test-model",
+	}
+	seedChannelUsageTestChannel(t, channel)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/tasks", nil)
+	ctx.Set("username", "test_user")
+	ctx.Set("token_name", "test_token")
+	ctx.Set(common.RequestIdKey, "req-task-submit")
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		OriginModelName: "test-model",
+		UsingGroup:      "default",
+		RequestId:       "req-task-submit",
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			Action: "test",
+		},
+		PriceData: types.PriceData{
+			Quota:      25,
+			ModelPrice: 0.01,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            channelID,
+			ApiKey:               "sk-task-submit",
+			ChannelMultiKeyIndex: 0,
+		},
+	}
+
+	LogTaskConsumption(ctx, info)
+
+	var keyUsage model.ChannelKeyUsage
+	require.NoError(t, model.DB.Where("channel_id = ?", channelID).First(&keyUsage).Error)
+	assert.EqualValues(t, 25, keyUsage.QuotaLimitUsed)
+
+	var detail model.ChannelUsageDaily
+	require.NoError(t, model.DB.Where("channel_id = ? AND key_fingerprint = ?", channelID, keyUsage.KeyFingerprint).First(&detail).Error)
+	assert.EqualValues(t, 25, detail.Quota)
+	assert.EqualValues(t, 1, detail.RequestCount)
 }
 
 func TestRecalculate_NegativeDelta(t *testing.T) {

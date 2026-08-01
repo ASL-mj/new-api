@@ -69,10 +69,6 @@ func RecordChannelUsage(params ChannelUsageRecordParams) error {
 	if params.Quota == 0 && params.TokenUsed == 0 && params.RequestCount == 0 {
 		return nil
 	}
-	if params.Quota > 0 && params.TokenUsed == 0 && params.RequestCount == 0 && !params.HasKeyIdentity && canBatchPureChannelUsage(params.ChannelID) {
-		model.ApplyChannelUsedQuotaWithBatch(params.ChannelID, params.Quota)
-		return nil
-	}
 
 	result, err := model.ApplyChannelUsageSettlement(model.ChannelUsageSettlementParams{
 		ChannelID:      params.ChannelID,
@@ -88,39 +84,24 @@ func RecordChannelUsage(params ChannelUsageRecordParams) error {
 		return err
 	}
 
-	channelStatusPropagated := false
-	channelAutoDisabledByKeyPropagation := false
 	if result.Key != nil && result.Key.KeyJustExhausted {
-		channelStatusPropagated = model.UpdateChannelStatus(
+		model.UpdateChannelStatus(
 			params.ChannelID,
 			params.SelectedKey,
 			common.ChannelStatusAutoDisabled,
 			model.ChannelKeyQuotaDisabledReason,
 		)
-		channelAutoDisabledByKeyPropagation = result.Key.ChannelJustExhausted
 		recordKeyQuotaExhaustedEvent(params, *result.Key)
 	}
 
-	channelJustExhausted := result.Channel.ChannelJustExhausted || channelAutoDisabledByKeyPropagation
+	channelJustExhausted := result.Channel.ChannelJustExhausted ||
+		(result.Key != nil && result.Key.ChannelJustExhausted)
 	if channelJustExhausted {
-		if result.Channel.ChannelJustExhausted && !channelStatusPropagated {
-			propagateChannelAutoDisabled(params.ChannelID)
-		}
+		propagateChannelAutoDisabled(params.ChannelID)
 		recordChannelQuotaExhaustedEvent(params, result)
 	}
 
 	return nil
-}
-
-func canBatchPureChannelUsage(channelID int) bool {
-	if !common.BatchUpdateEnabled || channelID <= 0 {
-		return false
-	}
-	channel, err := model.GetChannelById(channelID, true)
-	if err != nil || channel == nil {
-		return false
-	}
-	return !(channel.UsesChannelQuota() && channel.QuotaLimit > 0)
 }
 
 func propagateChannelAutoDisabled(channelID int) {

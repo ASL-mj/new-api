@@ -61,15 +61,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Other:     other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	if err := RecordChannelUsage(ChannelUsageRecordParams{
-		ChannelID:      info.ChannelId,
-		Quota:          info.PriceData.Quota,
-		RequestCount:   1,
-		ModelName:      info.OriginModelName,
-		Group:          info.UsingGroup,
-		RequestID:      info.RequestId,
-		HasKeyIdentity: false,
-	}); err != nil {
+	if err := RecordRelayChannelUsage(info, info.PriceData.Quota, 0, 1); err != nil {
 		logger.LogError(c, "error recording channel usage: "+err.Error())
 	}
 }

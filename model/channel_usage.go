@@ -607,13 +607,12 @@ func ApplyChannelKeyUsage(channel *Channel, selectedKey string, keyIndex int, qu
 	}
 
 	UpdateChannelStatus(channel.Id, selectedKey, common.ChannelStatusAutoDisabled, ChannelKeyQuotaDisabledReason)
-
-	var refreshedChannel Channel
-	if err := DB.Select("status").First(&refreshedChannel, channel.Id).Error; err != nil {
-		return result, err
+	if result.ChannelJustExhausted {
+		if err := UpdateAbilityStatus(channel.Id, false); err != nil {
+			common.SysLog(fmt.Sprintf("failed to disable abilities for exhausted channel: channel_id=%d, error=%v", channel.Id, err))
+		}
+		CacheUpdateChannelStatus(channel.Id, common.ChannelStatusAutoDisabled)
 	}
-	result.ChannelStatus = refreshedChannel.Status
-	result.ChannelJustExhausted = refreshedChannel.Status == common.ChannelStatusAutoDisabled
 	return result, nil
 }
 
@@ -743,6 +742,12 @@ func applyChannelKeyUsageTx(tx *gorm.DB, channel *Channel, selectedKey string, k
 		return result, errors.New("channel is nil")
 	}
 
+	var lockedChannel Channel
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedChannel, channel.Id).Error; err != nil {
+		return result, err
+	}
+	channel = &lockedChannel
+
 	currentUsages, err := ensureChannelKeyUsageRecords(tx, channel)
 	if err != nil {
 		return result, err
@@ -794,6 +799,13 @@ func applyChannelKeyUsageTx(tx *gorm.DB, channel *Channel, selectedKey string, k
 			return result, statusUpdateResult.Error
 		}
 		result.KeyJustExhausted = statusUpdateResult.RowsAffected == 1
+		if result.KeyJustExhausted {
+			channelStatusUpdate, err := disableChannelWhenNoUsableKeysTx(tx, channel.Id)
+			if err != nil {
+				return result, err
+			}
+			result.ChannelJustExhausted = channelStatusUpdate
+		}
 	}
 
 	var refreshedUsage ChannelKeyUsage
@@ -815,6 +827,34 @@ func applyChannelKeyUsageTx(tx *gorm.DB, channel *Channel, selectedKey string, k
 	result.Status = refreshedUsage.Status
 	result.ChannelStatus = refreshedChannel.Status
 	return result, nil
+}
+
+func disableChannelWhenNoUsableKeysTx(tx *gorm.DB, channelID int) (bool, error) {
+	if tx == nil {
+		return false, errors.New("transaction is required")
+	}
+
+	var usableKeyCount int64
+	if err := tx.Model(&ChannelKeyUsage{}).
+		Where(
+			"channel_id = ? AND status = ? AND (quota_limit <= 0 OR quota_limit_used < quota_limit)",
+			channelID,
+			common.ChannelStatusEnabled,
+		).
+		Count(&usableKeyCount).Error; err != nil {
+		return false, err
+	}
+	if usableKeyCount > 0 {
+		return false, nil
+	}
+
+	statusUpdate := tx.Model(&Channel{}).
+		Where("id = ? AND status = ?", channelID, common.ChannelStatusEnabled).
+		Update("status", common.ChannelStatusAutoDisabled)
+	if statusUpdate.Error != nil {
+		return false, statusUpdate.Error
+	}
+	return statusUpdate.RowsAffected == 1, nil
 }
 
 func recordChannelUsageDailyTx(tx *gorm.DB, channelID int, keyFingerprint string, quota int64, tokenUsed int64, requestCount int64, now time.Time) error {

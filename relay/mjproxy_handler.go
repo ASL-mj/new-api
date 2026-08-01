@@ -243,15 +243,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(info.UserId, priceData.Quota)
-			if err := service.RecordChannelUsage(service.ChannelUsageRecordParams{
-				ChannelID:      info.ChannelId,
-				Quota:          priceData.Quota,
-				RequestCount:   1,
-				ModelName:      modelName,
-				Group:          info.UsingGroup,
-				RequestID:      info.RequestId,
-				HasKeyIdentity: false,
-			}); err != nil {
+			if err := service.RecordRelayChannelUsage(info, priceData.Quota, 0, 1); err != nil {
 				common.SysLog("error recording channel usage: " + err.Error())
 			}
 		}
@@ -559,15 +551,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, priceData.Quota)
-			if err := service.RecordChannelUsage(service.ChannelUsageRecordParams{
-				ChannelID:      relayInfo.ChannelId,
-				Quota:          priceData.Quota,
-				RequestCount:   1,
-				ModelName:      modelName,
-				Group:          relayInfo.UsingGroup,
-				RequestID:      relayInfo.RequestId,
-				HasKeyIdentity: false,
-			}); err != nil {
+			if err := service.RecordRelayChannelUsage(relayInfo, priceData.Quota, 0, 1); err != nil {
 				common.SysLog("error recording channel usage: " + err.Error())
 			}
 		}

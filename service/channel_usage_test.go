@@ -332,3 +332,127 @@ func TestRecordRelayChannelUsageUsesRelayIdentity(t *testing.T) {
 	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&keyUsage).Error)
 	assert.EqualValues(t, 12, keyUsage.QuotaLimitUsed)
 }
+
+func TestRecordChannelUsageFinalKeyExhaustionDisablesParentAndEmitsSingleChannelEvent(t *testing.T) {
+	truncate(t)
+
+	channel := &model.Channel{
+		Id:             107,
+		Name:           "final-key-exhaustion",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusAutoDisabled,
+			},
+			MultiKeyDisabledReason: map[int]string{
+				0: model.ChannelKeyQuotaDisabledReason,
+			},
+		},
+	}
+	seedChannelUsageTestChannel(t, channel)
+
+	usages, err := model.EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.ChannelKeyUsage{}).
+		Where("id = ?", usages[0].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 100,
+			"status":           common.ChannelStatusAutoDisabled,
+			"disabled_reason":  model.ChannelKeyQuotaDisabledReason,
+		}).Error)
+	require.NoError(t, model.DB.Model(&model.ChannelKeyUsage{}).
+		Where("id = ?", usages[1].Id).
+		Updates(map[string]interface{}{
+			"quota_limit":      100,
+			"quota_limit_used": 95,
+			"status":           common.ChannelStatusEnabled,
+		}).Error)
+
+	var events []model.SystemEventLog
+	previousRecorder := recordChannelUsageSystemEvent
+	recordChannelUsageSystemEvent = func(event model.SystemEventLog) {
+		events = append(events, event)
+	}
+	t.Cleanup(func() {
+		recordChannelUsageSystemEvent = previousRecorder
+	})
+
+	record := ChannelUsageRecordParams{
+		ChannelID:      channel.Id,
+		SelectedKey:    "sk-beta",
+		KeyIndex:       1,
+		HasKeyIdentity: true,
+		Quota:          10,
+		TokenUsed:      20,
+		RequestCount:   1,
+		ModelName:      "gpt-4o-mini",
+		Group:          "default",
+		RequestID:      "req-final-key",
+	}
+	require.NoError(t, RecordChannelUsage(record))
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.ChannelInfo.MultiKeyStatusList[1])
+
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+	assert.False(t, ability.Enabled)
+
+	eventCounts := map[string]int{}
+	for _, event := range events {
+		var extra map[string]interface{}
+		require.NoError(t, common.Unmarshal([]byte(event.Extra), &extra))
+		eventType, _ := extra["event"].(string)
+		eventCounts[eventType]++
+	}
+	assert.Equal(t, 1, eventCounts["key_quota_exhausted"])
+	assert.Equal(t, 1, eventCounts["channel_quota_exhausted"])
+
+	require.NoError(t, RecordChannelUsage(record))
+	assert.Len(t, events, 2, "repeated in-flight settlement must not emit duplicate exhaustion events")
+}
+
+func TestRecordChannelUsageBatchEnabledStillWritesDailyUsage(t *testing.T) {
+	truncate(t)
+
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.BatchUpdateEnabled = true
+	t.Cleanup(func() {
+		common.BatchUpdateEnabled = previousBatchUpdateEnabled
+	})
+
+	channel := &model.Channel{
+		Id:             108,
+		Name:           "batch-daily",
+		Key:            "sk-batch",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeNone,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+	}
+	seedChannelUsageTestChannel(t, channel)
+
+	when := time.Date(2026, 8, 1, 16, 0, 0, 0, time.UTC)
+	require.NoError(t, RecordChannelUsage(ChannelUsageRecordParams{
+		ChannelID: channel.Id,
+		Quota:     17,
+		Now:       when,
+	}))
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.EqualValues(t, 17, reloaded.UsedQuota)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channel.Id, "", usageDate)
+	assert.EqualValues(t, 17, summary.Quota)
+}
