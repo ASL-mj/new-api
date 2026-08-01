@@ -2735,6 +2735,21 @@ func TestGetChannelUsageStatsBatchChunksAndZeroFillsMoreThanTwoHundredIDs(t *tes
 	assert.Zero(t, unknown.QuotaLimit)
 }
 
+func TestGetChannelUsageStatsBatchTreatsKeyOnlyModeAsUnlimitedAtChannelLevel(t *testing.T) {
+	prepareChannelUsageTable(t)
+	channel := &Channel{
+		Id: 1201, Name: "key-only-stats", Key: "sk-a\nsk-b",
+		QuotaLimitMode: ChannelQuotaLimitModeKey,
+		QuotaLimit:     500, QuotaLimitUsed: 300,
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	stats, err := GetChannelUsageStatsBatch([]int{channel.Id}, "2026-08-01", "2026-07-03")
+	require.NoError(t, err)
+	assert.Zero(t, stats[channel.Id].QuotaLimit)
+	assert.Zero(t, stats[channel.Id].QuotaLimitUsed)
+}
+
 func TestChannelUsageDailyDryRunSQLAcrossDialectors(t *testing.T) {
 	prepareChannelUsageTable(t)
 

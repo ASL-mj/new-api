@@ -278,15 +278,17 @@ func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) 
 	for _, chunk := range chunkChannelUsageStatsIDs(ids, 200) {
 		var channels []Channel
 		if err := DB.Model(&Channel{}).
-			Select("id", "quota_limit_used", "quota_limit", "balance").
+			Select("id", "quota_limit_mode", "quota_limit_used", "quota_limit", "balance").
 			Where("id IN ?", chunk).
 			Find(&channels).Error; err != nil {
 			return nil, err
 		}
 		for _, channel := range channels {
 			stat := results[channel.Id]
-			stat.QuotaLimitUsed = channel.QuotaLimitUsed
-			stat.QuotaLimit = channel.QuotaLimit
+			if NormalizeQuotaLimitMode(channel.QuotaLimitMode) != ChannelQuotaLimitModeKey {
+				stat.QuotaLimitUsed = channel.QuotaLimitUsed
+				stat.QuotaLimit = channel.QuotaLimit
+			}
 			stat.Balance = channel.Balance
 			results[channel.Id] = stat
 		}
