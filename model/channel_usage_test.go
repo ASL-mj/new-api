@@ -18,6 +18,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func prepareChannelUsageTable(t *testing.T) {
@@ -2079,6 +2080,322 @@ func TestChannelUsageModelsMigrateAndEnforceUniqueConstraints(t *testing.T) {
 		Quota:          1,
 	}
 	assert.Error(t, DB.Create(duplicateDailyUsage).Error)
+}
+
+func TestRecordChannelUsageDailyAggregatesSummaryAndKeyRows(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	when := time.Date(2026, 8, 1, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, RecordChannelUsageDaily(101, "fp-alpha", 120, 240, 1, when))
+	require.NoError(t, RecordChannelUsageDaily(101, "fp-alpha", 80, 160, 2, when.Add(2*time.Hour)))
+
+	var rows []ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ?", 101).Order("key_fingerprint ASC").Find(&rows).Error)
+	require.Len(t, rows, 2)
+
+	assert.Equal(t, "", rows[0].KeyFingerprint)
+	assert.Equal(t, "2026-08-01", rows[0].UsageDate)
+	assert.EqualValues(t, 200, rows[0].Quota)
+	assert.EqualValues(t, 400, rows[0].TokenUsed)
+	assert.EqualValues(t, 3, rows[0].RequestCount)
+	assert.NotZero(t, rows[0].UpdatedAt)
+
+	assert.Equal(t, "fp-alpha", rows[1].KeyFingerprint)
+	assert.Equal(t, "2026-08-01", rows[1].UsageDate)
+	assert.EqualValues(t, 200, rows[1].Quota)
+	assert.EqualValues(t, 400, rows[1].TokenUsed)
+	assert.EqualValues(t, 3, rows[1].RequestCount)
+	assert.NotZero(t, rows[1].UpdatedAt)
+}
+
+func TestRecordChannelUsageDailyUsesLocalTimezoneDateBoundary(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	previousLocal := time.Local
+	time.Local = time.FixedZone("UTC+8", 8*60*60)
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
+	require.NoError(t, RecordChannelUsageDaily(
+		102,
+		"fp-boundary",
+		10,
+		20,
+		1,
+		time.Date(2026, 8, 1, 15, 59, 0, 0, time.UTC),
+	))
+	require.NoError(t, RecordChannelUsageDaily(
+		102,
+		"fp-boundary",
+		30,
+		40,
+		1,
+		time.Date(2026, 8, 1, 16, 1, 0, 0, time.UTC),
+	))
+
+	var summaryRows []ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ? AND key_fingerprint = ?", 102, "").Order("usage_date ASC").Find(&summaryRows).Error)
+	require.Len(t, summaryRows, 2)
+
+	assert.Equal(t, "2026-08-01", summaryRows[0].UsageDate)
+	assert.EqualValues(t, 10, summaryRows[0].Quota)
+	assert.Equal(t, "2026-08-02", summaryRows[1].UsageDate)
+	assert.EqualValues(t, 30, summaryRows[1].Quota)
+
+	var detailRows []ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ? AND key_fingerprint = ?", 102, "fp-boundary").Order("usage_date ASC").Find(&detailRows).Error)
+	require.Len(t, detailRows, 2)
+	assert.Equal(t, "2026-08-01", detailRows[0].UsageDate)
+	assert.Equal(t, "2026-08-02", detailRows[1].UsageDate)
+}
+
+func TestRecordChannelUsageDailyConcurrentDoesNotLoseCounts(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+
+	const goroutineCount = 12
+	const quotaPerWrite = int64(25)
+	const tokensPerWrite = int64(50)
+	const requestsPerWrite = int64(1)
+
+	when := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	errorsCh := make(chan error, goroutineCount)
+	var waitGroup sync.WaitGroup
+
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			errorsCh <- RecordChannelUsageDaily(103, "fp-concurrent", quotaPerWrite, tokensPerWrite, requestsPerWrite, when)
+		}()
+	}
+
+	waitGroup.Wait()
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	var summary ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ? AND key_fingerprint = ? AND usage_date = ?", 103, "", "2026-08-01").First(&summary).Error)
+	assert.EqualValues(t, goroutineCount*quotaPerWrite, summary.Quota)
+	assert.EqualValues(t, goroutineCount*tokensPerWrite, summary.TokenUsed)
+	assert.EqualValues(t, goroutineCount*requestsPerWrite, summary.RequestCount)
+
+	var detail ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ? AND key_fingerprint = ? AND usage_date = ?", 103, "fp-concurrent", "2026-08-01").First(&detail).Error)
+	assert.EqualValues(t, goroutineCount*quotaPerWrite, detail.Quota)
+	assert.EqualValues(t, goroutineCount*tokensPerWrite, detail.TokenUsed)
+	assert.EqualValues(t, goroutineCount*requestsPerWrite, detail.RequestCount)
+}
+
+func TestUpsertChannelUsageDailyHandlesConcurrentFirstCreate(t *testing.T) {
+	prepareConcurrentChannelUsageTable(t)
+
+	const goroutineCount = 10
+	delta := ChannelUsageDaily{
+		ChannelId:      104,
+		KeyFingerprint: "fp-race",
+		UsageDate:      "2026-08-01",
+		Quota:          7,
+		TokenUsed:      9,
+		RequestCount:   1,
+		UpdatedAt:      1700000000,
+	}
+
+	errorsCh := make(chan error, goroutineCount)
+	var waitGroup sync.WaitGroup
+
+	for i := 0; i < goroutineCount; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				_, err := UpsertChannelUsageDaily(tx, delta)
+				return err
+			})
+			errorsCh <- err
+		}()
+	}
+
+	waitGroup.Wait()
+	close(errorsCh)
+
+	for err := range errorsCh {
+		require.NoError(t, err)
+	}
+
+	var row ChannelUsageDaily
+	require.NoError(t, DB.Where("channel_id = ? AND key_fingerprint = ? AND usage_date = ?", delta.ChannelId, delta.KeyFingerprint, delta.UsageDate).First(&row).Error)
+	assert.EqualValues(t, goroutineCount*delta.Quota, row.Quota)
+	assert.EqualValues(t, goroutineCount*delta.TokenUsed, row.TokenUsed)
+	assert.EqualValues(t, goroutineCount*delta.RequestCount, row.RequestCount)
+}
+
+func TestGetChannelUsageStatsBatchZeroFillsAndUses30DaySummaryRange(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	require.NoError(t, DB.Create([]*Channel{
+		{
+			Id:             201,
+			Name:           "alpha",
+			Key:            "sk-alpha",
+			Status:         common.ChannelStatusEnabled,
+			Group:          "default",
+			Models:         "gpt-4o-mini",
+			QuotaLimit:     800,
+			QuotaLimitUsed: 320,
+			Balance:        12.5,
+		},
+		{
+			Id:             202,
+			Name:           "beta",
+			Key:            "sk-beta",
+			Status:         common.ChannelStatusEnabled,
+			Group:          "default",
+			Models:         "gpt-4o-mini",
+			QuotaLimit:     400,
+			QuotaLimitUsed: 25,
+			Balance:        3.25,
+		},
+	}).Error)
+
+	require.NoError(t, DB.Create([]*ChannelUsageDaily{
+		{ChannelId: 201, KeyFingerprint: "", UsageDate: "2026-08-01", Quota: 50, TokenUsed: 500, RequestCount: 5, UpdatedAt: 1},
+		{ChannelId: 201, KeyFingerprint: "", UsageDate: "2026-07-20", Quota: 30, TokenUsed: 300, RequestCount: 3, UpdatedAt: 1},
+		{ChannelId: 201, KeyFingerprint: "", UsageDate: "2026-07-01", Quota: 999, TokenUsed: 999, RequestCount: 9, UpdatedAt: 1},
+		{ChannelId: 201, KeyFingerprint: "fp-alpha", UsageDate: "2026-08-01", Quota: 777, TokenUsed: 888, RequestCount: 7, UpdatedAt: 1},
+		{ChannelId: 202, KeyFingerprint: "fp-beta", UsageDate: "2026-08-01", Quota: 100, TokenUsed: 1000, RequestCount: 10, UpdatedAt: 1},
+	}).Error)
+
+	stats, err := GetChannelUsageStatsBatch([]int{201, 201, 202, 999, 0, -1}, "2026-08-01", "2026-07-03")
+	require.NoError(t, err)
+	require.Len(t, stats, 3)
+
+	alpha := stats[201]
+	assert.Equal(t, 201, alpha.ChannelID)
+	assert.EqualValues(t, 50, alpha.TodayQuota)
+	assert.EqualValues(t, 80, alpha.Last30dQuota)
+	assert.EqualValues(t, 800, alpha.Last30dTokenUsed)
+	assert.EqualValues(t, 8, alpha.Last30dRequestCount)
+	assert.EqualValues(t, 320, alpha.QuotaLimitUsed)
+	assert.EqualValues(t, 800, alpha.QuotaLimit)
+	assert.Equal(t, 12.5, alpha.Balance)
+
+	beta := stats[202]
+	assert.Equal(t, 202, beta.ChannelID)
+	assert.EqualValues(t, 0, beta.TodayQuota)
+	assert.EqualValues(t, 0, beta.Last30dQuota)
+	assert.EqualValues(t, 0, beta.Last30dTokenUsed)
+	assert.EqualValues(t, 0, beta.Last30dRequestCount)
+	assert.EqualValues(t, 25, beta.QuotaLimitUsed)
+	assert.EqualValues(t, 400, beta.QuotaLimit)
+	assert.Equal(t, 3.25, beta.Balance)
+
+	unknown := stats[999]
+	assert.Equal(t, 999, unknown.ChannelID)
+	assert.Zero(t, unknown.TodayQuota)
+	assert.Zero(t, unknown.Last30dQuota)
+	assert.Zero(t, unknown.Last30dTokenUsed)
+	assert.Zero(t, unknown.Last30dRequestCount)
+	assert.Zero(t, unknown.QuotaLimitUsed)
+	assert.Zero(t, unknown.QuotaLimit)
+	assert.Zero(t, unknown.Balance)
+	_, hasZero := stats[0]
+	assert.False(t, hasZero)
+	_, hasNegative := stats[-1]
+	assert.False(t, hasNegative)
+}
+
+func TestChannelUsageDailyDryRunSQLAcrossDialectors(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name        string
+		open        func(*sql.DB) (*gorm.DB, error)
+		wantQuote   string
+		wantBindVar string
+	}{
+		{
+			name: "sqlite",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(sqlite.Dialector{Conn: conn}, &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_usage_daily`",
+			wantBindVar: "?",
+		},
+		{
+			name: "mysql",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(mysql.New(mysql.Config{
+					Conn:                      conn,
+					SkipInitializeWithVersion: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "`channel_usage_daily`",
+			wantBindVar: "?",
+		},
+		{
+			name: "postgres",
+			open: func(conn *sql.DB) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{
+					Conn:             conn,
+					WithoutReturning: true,
+				}), &gorm.Config{DryRun: true})
+			},
+			wantQuote:   "\"channel_usage_daily\"",
+			wantBindVar: "$",
+		},
+	}
+
+	delta := ChannelUsageDaily{
+		ChannelId:      301,
+		KeyFingerprint: "fp-dry-run",
+		UsageDate:      "2026-08-01",
+		Quota:          7,
+		TokenUsed:      11,
+		RequestCount:   1,
+		UpdatedAt:      1700000000,
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dryRunDB, err := tc.open(sqlDB)
+			require.NoError(t, err)
+
+			updateStmt := dryRunDB.Model(&ChannelUsageDaily{}).
+				Where(buildChannelUsageDailyLookup(delta)).
+				Updates(buildChannelUsageDailyUpdates(delta)).Statement
+			updateSQL := updateStmt.SQL.String()
+			updateSQLUpper := strings.ToUpper(updateSQL)
+
+			assert.Contains(t, updateSQL, tc.wantQuote)
+			assert.Contains(t, updateSQLUpper, "UPDATE")
+			assert.Contains(t, updateSQL, "quota")
+			assert.Contains(t, updateSQL, "token_used")
+			assert.Contains(t, updateSQL, "request_count")
+			assert.Contains(t, updateSQL, tc.wantBindVar)
+			assert.NotContains(t, updateSQLUpper, "RETURNING")
+			assert.NotEmpty(t, updateStmt.Vars)
+
+			createStmt := dryRunDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&delta).Statement
+			createSQL := createStmt.SQL.String()
+			createSQLUpper := strings.ToUpper(createSQL)
+
+			assert.Contains(t, createSQL, tc.wantQuote)
+			assert.Contains(t, createSQLUpper, "INSERT")
+			assert.Contains(t, createSQL, tc.wantBindVar)
+			assert.NotEmpty(t, createStmt.Vars)
+			assert.True(
+				t,
+				strings.Contains(createSQLUpper, "ON CONFLICT") || strings.Contains(createSQLUpper, "ON DUPLICATE KEY"),
+			)
+		})
+	}
 }
 
 func TestFingerprintChannelKeyPersistsSecretAcrossCacheReset(t *testing.T) {

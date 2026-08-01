@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -77,6 +78,25 @@ func (ChannelUsageDaily) TableName() string {
 	return "channel_usage_daily"
 }
 
+type ChannelUsageStats struct {
+	ChannelID           int     `json:"channel_id"`
+	TodayQuota          int64   `json:"today_quota"`
+	Last30dQuota        int64   `json:"last30d_quota"`
+	Last30dTokenUsed    int64   `json:"last30d_token_used"`
+	Last30dRequestCount int64   `json:"last30d_request_count"`
+	QuotaLimitUsed      int64   `json:"quota_limit_used"`
+	QuotaLimit          int64   `json:"quota_limit"`
+	Balance             float64 `json:"balance"`
+}
+
+type channelUsageDailyAggregate struct {
+	ChannelID           int
+	TodayQuota          int64
+	Last30dQuota        int64
+	Last30dTokenUsed    int64
+	Last30dRequestCount int64
+}
+
 type ChannelUsageApplyResult struct {
 	UsedQuota            int64
 	QuotaLimitUsed       int64
@@ -101,6 +121,143 @@ func (usage ChannelKeyUsage) IsQuotaExceeded() bool {
 		return false
 	}
 	return usage.QuotaLimitUsed >= usage.QuotaLimit
+}
+
+func RecordChannelUsageDaily(channelID int, keyFingerprint string, quota int64, tokenUsed int64, requestCount int64, now time.Time) error {
+	if DB == nil {
+		return errors.New("database not initialized")
+	}
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+
+	usageDate := channelUsageDateFromTime(now)
+	if now.IsZero() {
+		now = time.Now()
+	}
+	updatedAt := now.Unix()
+
+	summaryDelta := ChannelUsageDaily{
+		ChannelId:      channelID,
+		KeyFingerprint: "",
+		UsageDate:      usageDate,
+		Quota:          quota,
+		TokenUsed:      tokenUsed,
+		RequestCount:   requestCount,
+		UpdatedAt:      updatedAt,
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := UpsertChannelUsageDaily(tx, summaryDelta); err != nil {
+			return err
+		}
+		if keyFingerprint == "" {
+			return nil
+		}
+
+		keyDelta := summaryDelta
+		keyDelta.KeyFingerprint = keyFingerprint
+		_, err := UpsertChannelUsageDaily(tx, keyDelta)
+		return err
+	})
+}
+
+func UpsertChannelUsageDaily(tx *gorm.DB, delta ChannelUsageDaily) (ChannelUsageDaily, error) {
+	if tx == nil {
+		return ChannelUsageDaily{}, errors.New("transaction is required")
+	}
+	if delta.ChannelId <= 0 {
+		return ChannelUsageDaily{}, errors.New("invalid channel id")
+	}
+	if delta.UsageDate == "" {
+		return ChannelUsageDaily{}, errors.New("usage date is required")
+	}
+	if delta.UpdatedAt == 0 {
+		delta.UpdatedAt = common.GetTimestamp()
+	}
+
+	lookup := buildChannelUsageDailyLookup(delta)
+	updates := buildChannelUsageDailyUpdates(delta)
+
+	updateResult := tx.Model(&ChannelUsageDaily{}).Where(lookup).Updates(updates)
+	if updateResult.Error != nil {
+		return ChannelUsageDaily{}, updateResult.Error
+	}
+	if updateResult.RowsAffected > 0 {
+		return readChannelUsageDailyFresh(tx, delta)
+	}
+
+	createResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&delta)
+	if createResult.Error != nil {
+		return ChannelUsageDaily{}, createResult.Error
+	}
+	if createResult.RowsAffected > 0 {
+		return readChannelUsageDailyFresh(tx, delta)
+	}
+
+	retryUpdate := tx.Model(&ChannelUsageDaily{}).Where(lookup).Updates(updates)
+	if retryUpdate.Error != nil {
+		return ChannelUsageDaily{}, retryUpdate.Error
+	}
+	return readChannelUsageDailyFresh(tx, delta)
+}
+
+func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) (map[int]ChannelUsageStats, error) {
+	if DB == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	ids := normalizeChannelUsageStatsIDs(channelIDs)
+	results := make(map[int]ChannelUsageStats, len(ids))
+	for _, channelID := range ids {
+		results[channelID] = ChannelUsageStats{ChannelID: channelID}
+	}
+	if len(ids) == 0 {
+		return results, nil
+	}
+
+	for _, chunk := range chunkChannelUsageStatsIDs(ids, 200) {
+		var channels []Channel
+		if err := DB.Model(&Channel{}).
+			Select("id", "quota_limit_used", "quota_limit", "balance").
+			Where("id IN ?", chunk).
+			Find(&channels).Error; err != nil {
+			return nil, err
+		}
+		for _, channel := range channels {
+			stat := results[channel.Id]
+			stat.QuotaLimitUsed = channel.QuotaLimitUsed
+			stat.QuotaLimit = channel.QuotaLimit
+			stat.Balance = channel.Balance
+			results[channel.Id] = stat
+		}
+
+		var aggregates []channelUsageDailyAggregate
+		if err := DB.Model(&ChannelUsageDaily{}).
+			Select(
+				"channel_id, "+
+					"SUM(CASE WHEN usage_date = ? THEN quota ELSE 0 END) AS today_quota, "+
+					"SUM(quota) AS last30d_quota, "+
+					"SUM(token_used) AS last30d_token_used, "+
+					"SUM(request_count) AS last30d_request_count",
+				today,
+			).
+			Where("channel_id IN ? AND key_fingerprint = ? AND usage_date >= ? AND usage_date <= ?", chunk, "", start30d, today).
+			Group("channel_id").
+			Find(&aggregates).Error; err != nil {
+			return nil, err
+		}
+		for _, aggregate := range aggregates {
+			stat := results[aggregate.ChannelID]
+			stat.TodayQuota = aggregate.TodayQuota
+			stat.Last30dQuota = aggregate.Last30dQuota
+			stat.Last30dTokenUsed = aggregate.Last30dTokenUsed
+			stat.Last30dRequestCount = aggregate.Last30dRequestCount
+			results[aggregate.ChannelID] = stat
+		}
+	}
+
+	return results, nil
 }
 
 func ApplyChannelUsage(channelID int, quota int) (ChannelUsageApplyResult, error) {
@@ -169,6 +326,23 @@ func buildChannelUsageAutoDisableCondition(channelID int) (string, []interface{}
 
 func channelUsageQuotaLimitModes() []string {
 	return []string{ChannelQuotaLimitModeChannel, ChannelQuotaLimitModeBoth}
+}
+
+func buildChannelUsageDailyLookup(delta ChannelUsageDaily) map[string]interface{} {
+	return map[string]interface{}{
+		"channel_id":      delta.ChannelId,
+		"key_fingerprint": delta.KeyFingerprint,
+		"usage_date":      delta.UsageDate,
+	}
+}
+
+func buildChannelUsageDailyUpdates(delta ChannelUsageDaily) map[string]interface{} {
+	return map[string]interface{}{
+		"quota":         gorm.Expr("quota + ?", delta.Quota),
+		"token_used":    gorm.Expr("token_used + ?", delta.TokenUsed),
+		"request_count": gorm.Expr("request_count + ?", delta.RequestCount),
+		"updated_at":    delta.UpdatedAt,
+	}
 }
 
 func buildChannelKeyUsageUpdates(quota int) map[string]interface{} {
@@ -570,6 +744,53 @@ func shouldBatchChannelUsedQuotaUpdate(channelID int) (bool, error) {
 	}
 
 	return !(channel.UsesChannelQuota() && channel.QuotaLimit > 0), nil
+}
+
+func readChannelUsageDailyFresh(tx *gorm.DB, delta ChannelUsageDaily) (ChannelUsageDaily, error) {
+	var row ChannelUsageDaily
+	err := tx.Session(&gorm.Session{NewDB: true}).
+		Where(buildChannelUsageDailyLookup(delta)).
+		First(&row).Error
+	return row, err
+}
+
+func normalizeChannelUsageStatsIDs(channelIDs []int) []int {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+
+	seen := make(map[int]struct{}, len(channelIDs))
+	ids := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		if channelID <= 0 {
+			continue
+		}
+		if _, ok := seen[channelID]; ok {
+			continue
+		}
+		seen[channelID] = struct{}{}
+		ids = append(ids, channelID)
+	}
+	return ids
+}
+
+func chunkChannelUsageStatsIDs(channelIDs []int, chunkSize int) [][]int {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	if chunkSize <= 0 {
+		chunkSize = len(channelIDs)
+	}
+
+	chunks := make([][]int, 0, (len(channelIDs)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(channelIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(channelIDs) {
+			end = len(channelIDs)
+		}
+		chunks = append(chunks, channelIDs[start:end])
+	}
+	return chunks
 }
 
 func getChannelKeyFingerprintSecret() (string, error) {
