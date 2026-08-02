@@ -16,11 +16,16 @@ import (
 )
 
 func performMonitorGroupRequest(t *testing.T, method, target, body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
+	return performMonitorGroupRequestWithLanguage(t, method, target, body, "zh-CN", handler)
+}
+
+func performMonitorGroupRequestWithLanguage(t *testing.T, method, target, body, language string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("Accept-Language", language)
 	handler(ctx)
 	return recorder
 }
@@ -52,7 +57,9 @@ func TestMonitorGroupIntervalSecondsBounds(t *testing.T) {
 		ctx.Request.Header.Set("Content-Type", "application/json")
 		_, _, err := bindMonitorGroupRequest(ctx, false)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "15-3600 秒")
+		var localized *common.LocalizedError
+		require.ErrorAs(t, err, &localized)
+		assert.Equal(t, "monitor_group.interval_invalid", localized.Key)
 	}
 }
 
@@ -214,4 +221,23 @@ func TestUpdateMonitorGroupRejectsModelOutsideIntersection(t *testing.T) {
 	list := performMonitorGroupRequest(t, http.MethodGet, "/api/monitor_group/?p=1&page_size=20", "", GetMonitorGroups)
 	assert.Contains(t, list.Body.String(), `"channel_types":["OpenAI","Anthropic"]`)
 	assert.Contains(t, list.Body.String(), `"running":false`)
+}
+
+func TestMonitorGroupAPIMessagesAreLocalized(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	channel := &model.Channel{Type: 1, Key: "localized-key", Name: "Localized", Models: "gpt-5.4"}
+	require.NoError(t, model.DB.Create(channel).Error)
+
+	created := performMonitorGroupRequestWithLanguage(t, http.MethodPost, "/api/monitor_group/", `{
+		"name":"English Group","key":"english-group","primary_model":"gpt-5.4","channel_ids":[1],
+		"enabled":true,"user_visible":true,"interval_seconds":60,"timeout_seconds":30,"degraded_ms":3000
+	}`, "en", CreateMonitorGroup)
+	createdResponse := decodeMonitorGroupResponse(t, created)
+	assert.Equal(t, "Monitor group created", createdResponse["message"])
+
+	invalid := performMonitorGroupRequestWithLanguage(t, http.MethodPost, "/api/monitor_group/", `{
+		"name":"Traditional Group","key":"traditional-group","primary_model":"gpt-5.4","channel_ids":[1],
+		"enabled":true,"user_visible":true,"interval_seconds":10,"timeout_seconds":30,"degraded_ms":3000
+	}`, "zh-TW", CreateMonitorGroup)
+	assert.Contains(t, invalid.Body.String(), "檢測間隔必須在 15-3600 秒之間")
 }

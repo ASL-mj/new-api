@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -20,19 +22,13 @@ var (
 func GetModelPerformanceSummary(c *gin.Context) {
 	hours, ok := parsePerformanceHours(c.Query("hours"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "hours must be one of: 1, 24, 168",
-		})
+		modelPerformanceError(c, http.StatusBadRequest, i18n.MsgPerfMetricsHoursInvalid)
 		return
 	}
 
 	result, err := queryModelPerformanceSummary(hours, activePerformanceGroups())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "failed to query model performance summary",
-		})
+		modelPerformanceError(c, http.StatusInternalServerError, i18n.MsgPerfMetricsSummaryFailed)
 		return
 	}
 	if result.Models == nil {
@@ -48,19 +44,13 @@ func GetModelPerformanceSummary(c *gin.Context) {
 func GetModelPerformance(c *gin.Context) {
 	modelName := strings.TrimSpace(c.Query("model"))
 	if modelName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "model is required",
-		})
+		modelPerformanceError(c, http.StatusBadRequest, i18n.MsgPerfMetricsModelRequired)
 		return
 	}
 
 	hours, ok := parsePerformanceHours(c.Query("hours"))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "hours must be one of: 1, 24, 168",
-		})
+		modelPerformanceError(c, http.StatusBadRequest, i18n.MsgPerfMetricsHoursInvalid)
 		return
 	}
 
@@ -71,16 +61,20 @@ func GetModelPerformance(c *gin.Context) {
 		AllowedGroups: activePerformanceGroups(),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "failed to query model performance",
-		})
+		modelPerformanceError(c, http.StatusInternalServerError, i18n.MsgPerfMetricsQueryFailed)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    result,
+	})
+}
+
+func modelPerformanceError(c *gin.Context, status int, key string) {
+	c.JSON(status, gin.H{
+		"success": false,
+		"message": common.TranslateMessage(c, key),
 	})
 }
 

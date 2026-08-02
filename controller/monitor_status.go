@@ -1,12 +1,12 @@
 package controller
 
 import (
-	"errors"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	"github.com/gin-gonic/gin"
@@ -44,7 +44,7 @@ type UserMonitorGroupDetail struct {
 func GetMonitorStatus(c *gin.Context) {
 	days, err := parseUserMonitorStatusDays(c.Query("days"))
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	groups, err := getUserVisibleMonitorGroups()
@@ -63,12 +63,12 @@ func GetMonitorStatus(c *gin.Context) {
 func GetMonitorStatusGroup(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		common.ApiErrorMsg(c, "监控分组 ID 无效")
+		common.ApiErrorI18n(c, i18n.MsgMonitorGroupIdInvalid)
 		return
 	}
 	days, err := parseUserMonitorStatusDays(c.Query("days"))
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	groups, err := getUserVisibleMonitorGroups()
@@ -95,7 +95,7 @@ func GetMonitorStatusGroup(c *gin.Context) {
 		})
 		return
 	}
-	common.ApiError(c, errors.New("监控分组不存在或不可见"))
+	common.ApiErrorI18n(c, i18n.MsgMonitorStatusNotFound)
 }
 
 func getUserVisibleMonitorGroups() ([]*model.MonitorGroup, error) {
@@ -214,7 +214,7 @@ func parseUserMonitorStatusDays(value string) (int, error) {
 	}
 	days, err := strconv.Atoi(value)
 	if err != nil || (days != 7 && days != 15 && days != 30) {
-		return 0, errors.New("监控周期只支持 7、15 或 30 天")
+		return 0, common.NewLocalizedError(i18n.MsgMonitorStatusDaysInvalid)
 	}
 	return days, nil
 }

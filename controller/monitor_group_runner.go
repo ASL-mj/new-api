@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/monitoring_setting"
@@ -120,7 +121,7 @@ func StopMonitorGroupRunnerForTest() {
 
 func RunMonitorGroupNow(groupId int) error {
 	if groupId <= 0 {
-		return errors.New("invalid monitor group id")
+		return common.NewLocalizedError(i18n.MsgMonitorGroupIdInvalid)
 	}
 	group, err := model.GetMonitorGroupById(groupId)
 	if err != nil {
@@ -176,14 +177,14 @@ func scheduleMonitorGroupRun(group *model.MonitorGroup) error {
 	state := monitorGroupRunner.state
 	monitorGroupRunner.Unlock()
 	if state == nil {
-		return errors.New("monitor group runner is not started")
+		return common.NewLocalizedError(i18n.MsgMonitorGroupRunnerNotStarted)
 	}
 	return scheduleMonitorGroupRunWithState(state, group)
 }
 
 func scheduleMonitorGroupRunWithState(state *monitorGroupRunnerState, group *model.MonitorGroup) error {
 	if group == nil || group.Id <= 0 {
-		return errors.New("invalid monitor group")
+		return common.NewLocalizedError(i18n.MsgMonitorGroupIdInvalid)
 	}
 	if _, loaded := runningMonitorGroups.LoadOrStore(group.Id, struct{}{}); loaded {
 		return errMonitorGroupRunning
@@ -217,11 +218,11 @@ func scheduleMonitorGroupRunWithState(state *monitorGroupRunnerState, group *mod
 }
 
 func runMonitorGroup(state *monitorGroupRunnerState, group *model.MonitorGroup) {
-	recordMonitorGroupEvent(group, "info", "监控分组开始探测")
+	recordMonitorGroupEvent(group, "info", i18n.MsgSystemEventMonitorProbeStarted, "开始探测", nil)
 	targets, err := model.GetMonitorGroupTargets(group.Id)
 	if err != nil {
 		common.SysError(fmt.Sprintf("failed to load monitor targets for group %d: %v", group.Id, err))
-		recordMonitorGroupEvent(group, "error", "监控分组探测失败：无法读取渠道配置")
+		recordMonitorGroupEvent(group, "error", i18n.MsgSystemEventMonitorChannelFailed, "探测失败：无法读取渠道配置", nil)
 		return
 	}
 
@@ -284,27 +285,49 @@ func runMonitorGroup(state *monitorGroupRunnerState, group *model.MonitorGroup) 
 	if len(checks) > 0 {
 		if err := model.InsertMonitorChecks(checks); err != nil {
 			common.SysError(fmt.Sprintf("failed to save monitor checks for group %d: %v", group.Id, err))
-			recordMonitorGroupEvent(group, "error", "监控分组探测失败：无法保存探测结果")
+			recordMonitorGroupEvent(group, "error", i18n.MsgSystemEventMonitorSaveFailed, "探测失败：无法保存探测结果", nil)
 			return
 		}
 	}
 	if err := model.DB.Model(&model.MonitorGroup{}).Where("id = ?", group.Id).Update("last_checked_at", time.Now().Unix()).Error; err != nil {
 		common.SysError(fmt.Sprintf("failed to update monitor group %d check time: %v", group.Id, err))
-		recordMonitorGroupEvent(group, "error", "监控分组探测失败：无法更新完成时间")
+		recordMonitorGroupEvent(group, "error", i18n.MsgSystemEventMonitorFinishFailed, "探测失败：无法更新完成时间", nil)
 		return
 	}
-	recordMonitorGroupEvent(group, monitorGroupCompletionLevel(checks), monitorGroupCompletionMessage(checks))
+	recordMonitorGroupCompletionEvent(group, checks)
 }
 
-func recordMonitorGroupEvent(group *model.MonitorGroup, level, message string) {
+func recordMonitorGroupEvent(group *model.MonitorGroup, level, messageKey, message string, extra map[string]any) {
 	if group == nil {
 		return
 	}
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	extra["group_id"] = group.Id
+	extra["group_name"] = group.Name
+	extraJSON, _ := common.Marshal(extra)
 	recordMonitorSystemEvent(model.SystemEventLog{
 		CreatedAt: common.GetTimestamp(), Level: level, Component: "monitor_group",
-		Message:   fmt.Sprintf("监控分组 #%d（%s）：%s", group.Id, group.Name, message),
-		ModelName: group.PrimaryModel,
+		Message:    fmt.Sprintf("监控分组 #%d（%s）%s", group.Id, group.Name, message),
+		MessageKey: messageKey, ModelName: group.PrimaryModel, Extra: string(extraJSON),
 	})
+}
+
+func recordMonitorGroupCompletionEvent(group *model.MonitorGroup, checks []*model.MonitorCheck) {
+	if len(checks) == 0 {
+		recordMonitorGroupEvent(
+			group, "info", i18n.MsgSystemEventMonitorNoTargets,
+			"探测完成，没有可执行的渠道或模型", nil,
+		)
+		return
+	}
+	operational, degraded, failed := monitorGroupCompletionStats(checks)
+	recordMonitorGroupEvent(
+		group, monitorGroupCompletionLevel(checks), i18n.MsgSystemEventMonitorCompleted,
+		fmt.Sprintf("探测完成：正常 %d，降级 %d，失败或超时 %d", operational, degraded, failed),
+		map[string]any{"operational": operational, "degraded": degraded, "failed": failed},
+	)
 }
 
 func monitorGroupCompletionLevel(checks []*model.MonitorCheck) string {
@@ -316,10 +339,7 @@ func monitorGroupCompletionLevel(checks []*model.MonitorCheck) string {
 	return "info"
 }
 
-func monitorGroupCompletionMessage(checks []*model.MonitorCheck) string {
-	if len(checks) == 0 {
-		return "探测完成，没有可执行的渠道或模型"
-	}
+func monitorGroupCompletionStats(checks []*model.MonitorCheck) (int, int, int) {
 	operational, degraded, failed := 0, 0, 0
 	for _, check := range checks {
 		switch check.Status {
@@ -331,7 +351,7 @@ func monitorGroupCompletionMessage(checks []*model.MonitorCheck) string {
 			failed++
 		}
 	}
-	return fmt.Sprintf("探测完成：正常 %d，降级 %d，失败或超时 %d", operational, degraded, failed)
+	return operational, degraded, failed
 }
 
 func monitorProbeWorker(state *monitorGroupRunnerState) {

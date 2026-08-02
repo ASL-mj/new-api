@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	opsmetrics "github.com/QuantumNous/new-api/pkg/ops_metrics"
 	"github.com/QuantumNous/new-api/service"
@@ -63,16 +64,18 @@ func (a *opsAggregate) add(row model.OpsMetricBucket) {
 func GetOpsOverview(c *gin.Context) {
 	result, _, err := queryOpsMetrics(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, buildOpsOverview(result))
+	overview := buildOpsOverview(result)
+	overview.RecentAlerts = recentOpsAlertsForContext(c, 10)
+	common.ApiSuccess(c, overview)
 }
 
 func GetOpsTrends(c *gin.Context) {
 	result, _, err := queryOpsMetrics(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, gin.H{"points": buildOpsRatePoints(result.Buckets)})
@@ -81,12 +84,12 @@ func GetOpsTrends(c *gin.Context) {
 func GetOpsDetails(c *gin.Context) {
 	result, _, err := queryOpsMetrics(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	metric := c.DefaultQuery("metric", "requests")
 	if !isValidOpsDetailMetric(metric) {
-		common.ApiErrorMsg(c, "invalid metric")
+		common.ApiErrorI18n(c, i18n.MsgOpsInvalidMetric)
 		return
 	}
 	channelIDs := make([]int, 0)
@@ -114,7 +117,7 @@ func GetOpsDetails(c *gin.Context) {
 	}
 	rows := make([]dto.OpsDetailRow, 0, len(result.Buckets))
 	for _, bucket := range result.Buckets {
-		rows = append(rows, opsDetailRow(bucket, channelNames))
+		rows = append(rows, opsDetailRow(bucket, channelNames, common.TranslateMessage(c, i18n.MsgOpsUnassignedChannel)))
 	}
 	sort.Slice(rows, func(left, right int) bool {
 		if rows[left].BucketTs == rows[right].BucketTs {
@@ -139,7 +142,7 @@ func GetOpsDetails(c *gin.Context) {
 func GetOpsRankings(c *gin.Context) {
 	result, _, err := queryOpsMetrics(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	type rankingKey struct {
@@ -179,7 +182,7 @@ func GetOpsRankings(c *gin.Context) {
 			ModelName:    key.model,
 			Group:        key.group,
 			ChannelId:    key.id,
-			ChannelName:  channelNameForOps(key.id, channelNames),
+			ChannelName:  channelNameForOps(key.id, channelNames, common.TranslateMessage(c, i18n.MsgOpsUnassignedChannel)),
 			RequestCount: aggregate.requestCount,
 			SuccessRate:  percentage(aggregate.successCount, aggregate.requestCount),
 			AvgTtftMs:    average(aggregate.ttftSumMs, aggregate.ttftCount),
@@ -250,17 +253,17 @@ func parseOpsMetricQuery(c *gin.Context) (opsmetrics.MetricQuery, error) {
 	now := time.Now().Unix()
 	start, err := optionalTimestamp(c.Query("start_timestamp"), now-int64(time.Hour.Seconds()))
 	if err != nil {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("invalid start_timestamp")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsInvalidStartTimestamp)
 	}
 	end, err := optionalTimestamp(c.Query("end_timestamp"), now)
 	if err != nil {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("invalid end_timestamp")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsInvalidEndTimestamp)
 	}
 	if end < start {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("end_timestamp must not be before start_timestamp")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsEndBeforeStart)
 	}
 	if time.Duration(end-start)*time.Second > maxOpsQueryRange {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("time range cannot exceed 30 days")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsRangeTooLarge)
 	}
 	filter := opsmetrics.MetricQuery{
 		StartBucketTs: start,
@@ -269,10 +272,10 @@ func parseOpsMetricQuery(c *gin.Context) (opsmetrics.MetricQuery, error) {
 		Model:         strings.TrimSpace(c.Query("model")),
 	}
 	if filter.ChannelType, err = optionalNonNegativeInt(c.Query("channel_type")); err != nil {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("invalid channel_type")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsInvalidChannelType)
 	}
 	if filter.ChannelID, err = optionalNonNegativeInt(c.Query("channel_id")); err != nil {
-		return opsmetrics.MetricQuery{}, fmt.Errorf("invalid channel_id")
+		return opsmetrics.MetricQuery{}, common.NewLocalizedError(i18n.MsgOpsInvalidChannelId)
 	}
 	return filter, nil
 }
@@ -371,12 +374,12 @@ func opsBucketDurationSeconds(bucketTs int64, now time.Time) float64 {
 	return float64(elapsed)
 }
 
-func opsDetailRow(bucket model.OpsMetricBucket, channelNames map[int]string) dto.OpsDetailRow {
+func opsDetailRow(bucket model.OpsMetricBucket, channelNames map[int]string, unassignedChannel string) dto.OpsDetailRow {
 	aggregate := opsAggregate{}
 	aggregate.add(bucket)
 	return dto.OpsDetailRow{
 		BucketTs: bucket.BucketTs, ModelName: bucket.ModelName, Group: bucket.Group,
-		ChannelId: bucket.ChannelId, ChannelName: channelNameForOps(bucket.ChannelId, channelNames), ChannelType: bucket.ChannelType,
+		ChannelId: bucket.ChannelId, ChannelName: channelNameForOps(bucket.ChannelId, channelNames, unassignedChannel), ChannelType: bucket.ChannelType,
 		RequestCount: aggregate.requestCount, SuccessCount: aggregate.successCount, SLA: sla(aggregate),
 		ErrorRate: percentage(aggregate.requestCount-aggregate.successCount, aggregate.requestCount), UpstreamErrors: aggregate.upstreamErrorCount,
 		AvgTtftMs: average(aggregate.ttftSumMs, aggregate.ttftCount), AvgDurationMs: average(aggregate.totalLatencyMs, aggregate.requestCount),
@@ -493,11 +496,18 @@ func expectedOpsJobHeartbeatMaxAges() map[string]time.Duration {
 }
 
 func recentOpsAlerts(limit int) []dto.OpsAlertItem {
+	return recentOpsAlertsForContext(nil, limit)
+}
+
+func recentOpsAlertsForContext(c *gin.Context, limit int) []dto.OpsAlertItem {
 	if limit <= 0 || model.DB == nil {
 		return []dto.OpsAlertItem{}
 	}
 	rows := make([]model.SystemEventLog, 0, limit)
-	if err := model.DB.Select("created_at", "level", "component", "message").
+	if err := model.DB.Select(
+		"created_at", "level", "component", "message", "message_key", "extra",
+		"request_id", "channel_id", "model_name", "group", "status_code", "latency_ms",
+	).
 		Where("level IN ?", []string{"warn", "error"}).
 		Order("created_at DESC, id DESC").
 		Limit(limit).
@@ -507,6 +517,9 @@ func recentOpsAlerts(limit int) []dto.OpsAlertItem {
 	}
 	alerts := make([]dto.OpsAlertItem, 0, len(rows))
 	for _, row := range rows {
+		if c != nil {
+			row = localizeSystemEventLog(c, row)
+		}
 		alerts = append(alerts, dto.OpsAlertItem{
 			CreatedAt: row.CreatedAt,
 			Level:     row.Level,
@@ -553,9 +566,9 @@ func ratePerSecond(value int64, seconds float64) float64 {
 	return math.Round(float64(value)/seconds*100) / 100
 }
 
-func channelNameForOps(channelID int, names map[int]string) string {
+func channelNameForOps(channelID int, names map[int]string, unassignedChannel string) string {
 	if channelID == 0 {
-		return "未分配渠道"
+		return unassignedChannel
 	}
 	return names[channelID]
 }

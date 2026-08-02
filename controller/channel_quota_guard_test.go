@@ -167,6 +167,31 @@ func TestManageMultiKeysRejectsExhaustedKeyThenEnablesAfterReset(t *testing.T) {
 	assert.True(t, ability.Enabled)
 }
 
+func TestManageMultiKeysMessagesAreLocalized(t *testing.T) {
+	db := setupChannelQuotaGuardControllerTestDB(t)
+	channel := &model.Channel{
+		Id: 405, Name: "localized-multi-key", Key: "sk-one\nsk-two",
+		ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	disabled := performMonitorGroupRequestWithLanguage(
+		t, http.MethodPost, "/api/channel/multi_key/manage",
+		`{"channel_id":405,"action":"disable_key","key_index":0}`, "en", ManageMultiKeys,
+	)
+	disabledResponse := decodeChannelQuotaGuardResponse(t, disabled.Body.String())
+	assert.Equal(t, true, disabledResponse["success"])
+	assert.Equal(t, "Channel key disabled", disabledResponse["message"])
+
+	outOfRange := performMonitorGroupRequestWithLanguage(
+		t, http.MethodPost, "/api/channel/multi_key/manage",
+		`{"channel_id":405,"action":"enable_key","key_index":99}`, "zh-TW", ManageMultiKeys,
+	)
+	outOfRangeResponse := decodeChannelQuotaGuardResponse(t, outOfRange.Body.String())
+	assert.Equal(t, false, outOfRangeResponse["success"])
+	assert.Equal(t, "密鑰索引超出範圍", outOfRangeResponse["message"])
+}
+
 func TestUpdateChannelPartialStatusChangePreservesQuotaConfiguration(t *testing.T) {
 	db := setupChannelQuotaGuardControllerTestDB(t)
 	channel := &model.Channel{

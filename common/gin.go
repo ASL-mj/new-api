@@ -179,6 +179,14 @@ func GetContextKeyType[T any](c *gin.Context, key constant.ContextKey) (T, bool)
 }
 
 func ApiError(c *gin.Context, err error) {
+	var localized *LocalizedError
+	if errors.As(err, &localized) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": TranslateMessage(c, localized.Key, localized.Args),
+		})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
 		"message": err.Error(),

@@ -10,6 +10,7 @@ import (
 func TestGetSystemEventLogsFiltersRequestID(t *testing.T) {
 	prepareMonitorTables(t)
 	require.NoError(t, DB.AutoMigrate(&SystemEventLog{}))
+	assert.True(t, DB.Migrator().HasColumn(&SystemEventLog{}, "message_key"))
 	require.NoError(t, InsertSystemEventLogs([]SystemEventLog{
 		{CreatedAt: 100, Level: "info", Component: "relay", Message: "first", RequestId: "req-a"},
 		{CreatedAt: 101, Level: "error", Component: "relay", Message: "second", RequestId: "req-b"},

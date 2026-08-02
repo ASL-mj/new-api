@@ -143,7 +143,10 @@ func UpdateMonitorGroup(group *MonitorGroup, channelIds []int) error {
 			return err
 		}
 		if group.Key != "" && group.Key != existing.Key {
-			return errors.New("monitor group key cannot be changed")
+			return common.WrapLocalizedError(
+				errors.New("monitor group key cannot be changed"),
+				"monitor_group.key_immutable",
+			)
 		}
 
 		group.Key = existing.Key

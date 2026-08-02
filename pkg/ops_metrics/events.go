@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -20,7 +21,7 @@ func SetSystemEventRecorder(recorder func(model.SystemEventLog)) {
 	systemEventRecorder = recorder
 }
 
-func recordOpsSystemEvent(level, message string) {
+func recordOpsSystemEvent(level, messageKey, message string) {
 	systemEventRecorderMu.RLock()
 	recorder := systemEventRecorder
 	systemEventRecorderMu.RUnlock()
@@ -28,6 +29,12 @@ func recordOpsSystemEvent(level, message string) {
 		return
 	}
 	recorder(model.SystemEventLog{
-		CreatedAt: common.GetTimestamp(), Level: level, Component: "ops_metrics", Message: message,
+		CreatedAt: common.GetTimestamp(), Level: level, Component: "ops_metrics",
+		Message: message, MessageKey: messageKey,
 	})
 }
+
+var (
+	opsFlushRecoveredMessageKey = i18n.MsgSystemEventOpsFlushRecovered
+	opsFlushFailedMessageKey    = i18n.MsgSystemEventOpsFlushFailed
+)

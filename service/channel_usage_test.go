@@ -205,6 +205,7 @@ func TestRecordChannelUsageMultiKeyFirstExhaustionEmitsSingleKeyEvent(t *testing
 	require.Len(t, events, 1)
 	assert.Equal(t, "channel_usage", events[0].Component)
 	assert.Contains(t, events[0].Message, "Key")
+	assert.Equal(t, "system_event.channel_key_quota_exhausted", events[0].MessageKey)
 
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
@@ -464,14 +465,18 @@ func TestRecordChannelUsageFinalKeyExhaustionDisablesParentAndEmitsSingleChannel
 	assert.False(t, ability.Enabled)
 
 	eventCounts := map[string]int{}
+	messageKeys := map[string]int{}
 	for _, event := range events {
 		var extra map[string]interface{}
 		require.NoError(t, common.Unmarshal([]byte(event.Extra), &extra))
 		eventType, _ := extra["event"].(string)
 		eventCounts[eventType]++
+		messageKeys[event.MessageKey]++
 	}
 	assert.Equal(t, 1, eventCounts["key_quota_exhausted"])
 	assert.Equal(t, 1, eventCounts["channel_quota_exhausted"])
+	assert.Equal(t, 1, messageKeys["system_event.channel_key_quota_exhausted"])
+	assert.Equal(t, 1, messageKeys["system_event.channel_quota_exhausted"])
 
 	require.NoError(t, RecordChannelUsage(record))
 	assert.Len(t, events, 2, "repeated in-flight settlement must not emit duplicate exhaustion events")

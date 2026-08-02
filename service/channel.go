@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -29,7 +30,8 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 	if success {
 		RecordSystemEvent(model.SystemEventLog{
 			CreatedAt: common.GetTimestamp(), Level: "warn", Component: "channel_status",
-			Message: "渠道已自动禁用", ChannelId: channelError.ChannelId,
+			Message: "渠道已自动禁用", MessageKey: i18n.MsgSystemEventChannelAutoDisabled,
+			ChannelId: channelError.ChannelId,
 		})
 		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
@@ -42,7 +44,8 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 	if success {
 		RecordSystemEvent(model.SystemEventLog{
 			CreatedAt: common.GetTimestamp(), Level: "info", Component: "channel_status",
-			Message: "渠道已自动恢复", ChannelId: channelId,
+			Message: "渠道已自动恢复", MessageKey: i18n.MsgSystemEventChannelAutoRestored,
+			ChannelId: channelId,
 		})
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)

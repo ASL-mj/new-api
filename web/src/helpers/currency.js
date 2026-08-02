@@ -17,11 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+export const DEFAULT_CNY_EXCHANGE_RATE = 7;
+export const DEFAULT_CUSTOM_EXCHANGE_RATE = 1;
+
+const normalizeExchangeRate = (value, fallback) => {
+  const rate = Number(value);
+  return Number.isFinite(rate) && rate > 0 ? rate : fallback;
+};
+
 export function getCurrencyConfig() {
   const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
   const statusStr = localStorage.getItem('status');
 
-  let symbol = '$';
+  let symbol = quotaDisplayType === 'TOKENS' ? '' : '$';
   let rate = 1;
 
   if (quotaDisplayType === 'CNY') {
@@ -29,7 +37,10 @@ export function getCurrencyConfig() {
     try {
       if (statusStr) {
         const status = JSON.parse(statusStr);
-        rate = status?.usd_exchange_rate || 7;
+        rate = normalizeExchangeRate(
+          status?.usd_exchange_rate,
+          DEFAULT_CNY_EXCHANGE_RATE,
+        );
       }
     } catch (error) {}
   } else if (quotaDisplayType === 'CUSTOM') {
@@ -37,7 +48,10 @@ export function getCurrencyConfig() {
       if (statusStr) {
         const status = JSON.parse(statusStr);
         symbol = status?.custom_currency_symbol || '¤';
-        rate = status?.custom_currency_exchange_rate || 1;
+        rate = normalizeExchangeRate(
+          status?.custom_currency_exchange_rate,
+          DEFAULT_CUSTOM_EXCHANGE_RATE,
+        );
       }
     } catch (error) {}
   }

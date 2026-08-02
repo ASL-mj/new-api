@@ -42,12 +42,23 @@ func withPerformanceGroupRatios(t *testing.T, ratios string) {
 }
 
 func performModelPerformanceRequest(t *testing.T, target string) *httptest.ResponseRecorder {
+	return performModelPerformanceRequestWithLanguage(t, target, "en")
+}
+
+func performModelPerformanceRequestWithLanguage(t *testing.T, target, language string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, target, nil)
+	ctx.Request.Header.Set("Accept-Language", language)
 	GetModelPerformance(ctx)
 	return recorder
+}
+
+func TestGetModelPerformanceErrorsAreLocalized(t *testing.T) {
+	recorder := performModelPerformanceRequestWithLanguage(t, "/api/perf-metrics", "zh-TW")
+	response := decodeModelPerformanceResponse(t, recorder)
+	require.Equal(t, "必須提供模型名稱", response["message"])
 }
 
 func performModelPerformanceSummaryRequest(t *testing.T, target string) *httptest.ResponseRecorder {

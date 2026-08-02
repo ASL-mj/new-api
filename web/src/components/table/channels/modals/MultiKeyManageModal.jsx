@@ -93,37 +93,53 @@ const KeyQuotaEditor = ({ initialQuota, onQuotaChange, t }) => {
       <Text type='tertiary'>
         {t('填写 0 表示无限额，修改限额不会改变当前启用状态。')}
       </Text>
-      <Text size='small'>{t('金额')}</Text>
-      <InputNumber
-        value={amount}
-        prefix={isTokensDisplay ? undefined : currencyConfig.symbol}
-        min={0}
-        precision={isTokensDisplay ? 0 : 6}
-        step={isTokensDisplay ? 1 : 0.000001}
-        style={{ width: '100%' }}
-        onChange={handleAmountChange}
-      />
-      <div
-        className='text-xs cursor-pointer mt-1'
-        style={{ color: 'var(--semi-color-text-2)' }}
-        onClick={() => setShowQuotaInput((visible) => !visible)}
-      >
-        {showQuotaInput
-          ? `▾ ${t('收起原生额度输入')}`
-          : `▸ ${t('使用原生额度输入')}`}
-      </div>
-      {showQuotaInput && (
+      {isTokensDisplay ? (
         <div className='flex flex-col gap-1'>
           <Text size='small'>{t('原生额度')}</Text>
           <InputNumber
             value={quota}
             min={0}
             precision={0}
-            step={500000}
+            step={1}
             style={{ width: '100%' }}
             onChange={handleQuotaChange}
           />
         </div>
+      ) : (
+        <>
+          <Text size='small'>{t('金额')}</Text>
+          <InputNumber
+            value={amount}
+            prefix={currencyConfig.symbol}
+            min={0}
+            precision={6}
+            step={0.000001}
+            style={{ width: '100%' }}
+            onChange={handleAmountChange}
+          />
+          <div
+            className='text-xs cursor-pointer mt-1'
+            style={{ color: 'var(--semi-color-text-2)' }}
+            onClick={() => setShowQuotaInput((visible) => !visible)}
+          >
+            {showQuotaInput
+              ? `▾ ${t('收起原生额度输入')}`
+              : `▸ ${t('使用原生额度输入')}`}
+          </div>
+          {showQuotaInput && (
+            <div className='flex flex-col gap-1'>
+              <Text size='small'>{t('原生额度')}</Text>
+              <InputNumber
+                value={quota}
+                min={0}
+                precision={0}
+                step={1}
+                style={{ width: '100%' }}
+                onChange={handleQuotaChange}
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -503,6 +519,17 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     }
   };
 
+  const localizeDisabledReason = (reason) => {
+    switch (reason) {
+      case 'manually disabled':
+        return t('手动禁用');
+      case 'key quota limit reached':
+        return t('密钥限额已耗尽');
+      default:
+        return reason;
+    }
+  };
+
   // Table columns definition
   const columns = [
     {
@@ -536,10 +563,11 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
         if (record.status === 1 || !reason) {
           return <Text type='quaternary'>-</Text>;
         }
+        const localizedReason = localizeDisabledReason(reason);
         return (
-          <Tooltip content={reason}>
+          <Tooltip content={localizedReason}>
             <Text style={{ maxWidth: '200px', display: 'block' }} ellipsis>
-              {reason}
+              {localizedReason}
             </Text>
           </Tooltip>
         );

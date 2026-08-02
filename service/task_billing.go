@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -16,7 +17,8 @@ import (
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
-func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
+func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) time.Time {
+	usageRecordedAt := time.Now()
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
 	// 支持任务仅按次计费
@@ -61,9 +63,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Other:     other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	if err := RecordRelayChannelUsage(info, info.PriceData.Quota, 0, 1); err != nil {
+	if err := RecordRelayChannelUsageAt(info, info.PriceData.Quota, 0, 1, usageRecordedAt); err != nil {
 		logger.LogError(c, "error recording channel usage: "+err.Error())
 	}
+	return usageRecordedAt
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +152,34 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+func taskChannelUsageTime(task *model.Task) time.Time {
+	if task.PrivateData.ChannelUsageRecordedAt > 0 {
+		return time.Unix(task.PrivateData.ChannelUsageRecordedAt, 0)
+	}
+	if task.SubmitTime > 0 {
+		return time.Unix(task.SubmitTime, 0)
+	}
+	return time.Now()
+}
+
+func taskAdjustChannelUsage(ctx context.Context, task *model.Task, quotaDelta int, tokenUsedDelta int64) {
+	if task == nil || task.ChannelId <= 0 || (quotaDelta == 0 && tokenUsedDelta == 0) {
+		return
+	}
+	err := RecordChannelUsageDelta(ChannelUsageDeltaRecordParams{
+		ChannelID:      task.ChannelId,
+		KeyFingerprint: task.PrivateData.ChannelKeyFingerprint,
+		KeyIndex:       task.PrivateData.ChannelKeyIndex,
+		HasKeyIdentity: strings.TrimSpace(task.PrivateData.ChannelKeyFingerprint) != "",
+		QuotaDelta:     quotaDelta,
+		TokenUsedDelta: tokenUsedDelta,
+		Now:            taskChannelUsageTime(task),
+	})
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("adjust channel usage failed (task=%s, quota_delta=%d, token_delta=%d): %s", task.TaskID, quotaDelta, tokenUsedDelta, err.Error()))
+	}
+}
+
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
@@ -166,7 +197,10 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
 
-	// 3. 记录日志
+	// 3. 回冲渠道、密钥和渠道日报中的预扣额度。请求次数保留为一次真实提交。
+	taskAdjustChannelUsage(ctx, task, -quota, 0)
+
+	// 4. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
@@ -216,7 +250,12 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	// 调整令牌额度
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
 
-	task.Quota = actualQuota
+	// 渠道账本按最终计费额度做相同的正负差额结算，Token 统计独立处理。
+	taskAdjustChannelUsage(ctx, task, quotaDelta, 0)
+
+	if err := task.UpdateQuota(actualQuota); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("更新任务最终额度失败 task %s: %s", task.TaskID, err.Error()))
+	}
 
 	var logType int
 	var logQuota int
@@ -224,16 +263,6 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		logType = model.LogTypeConsume
 		logQuota = quotaDelta
 		model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
-		if err := RecordChannelUsage(ChannelUsageRecordParams{
-			ChannelID:      task.ChannelId,
-			Quota:          quotaDelta,
-			RequestCount:   0,
-			ModelName:      taskModelName(task),
-			Group:          task.Group,
-			HasKeyIdentity: false,
-		}); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("error recording channel usage for task %s: %s", task.TaskID, err.Error()))
-		}
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta

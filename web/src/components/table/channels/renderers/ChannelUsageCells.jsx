@@ -70,12 +70,13 @@ export const UpstreamBalanceCell = ({
   loading,
   error,
   onRefresh,
+  t,
 }) => {
   const value = aggregateStats(record, stats) || {};
   return renderState(
     loading,
     error,
-    <Tooltip content={record.children ? undefined : '点击更新上游余额'}>
+    <Tooltip content={record.children ? undefined : t('点击更新上游余额')}>
       <span
         className={record.children ? '' : 'cursor-pointer'}
         onClick={() => !record.children && onRefresh(record)}

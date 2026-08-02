@@ -230,7 +230,7 @@ const OtherSetting = () => {
       });
       showSuccess(t('保存成功'));
     } catch (error) {
-      console.error('文档地址更新失败', error);
+      console.error(t('文档地址更新失败'), error);
       showError(t('保存失败，请重试'));
     } finally {
       setLoadingInput((loadingInput) => ({

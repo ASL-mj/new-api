@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -47,7 +48,7 @@ func ResetChannelQuotaUsage(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "渠道限额用量已重置", "data": channel})
+	common.ApiSuccessI18n(c, i18n.MsgChannelUsageChannelQuotaReset, channel)
 }
 
 func GetChannelKeyUsageList(c *gin.Context) {
@@ -72,7 +73,7 @@ func ResetChannelKeyQuotaUsage(c *gin.Context) {
 		channelUsageError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "密钥限额用量已重置"})
+	common.ApiSuccessI18n(c, i18n.MsgChannelUsageKeyQuotaReset, nil)
 }
 
 func UpdateChannelKeyQuotaLimit(c *gin.Context) {
@@ -82,34 +83,34 @@ func UpdateChannelKeyQuotaLimit(c *gin.Context) {
 	}
 	request := updateChannelKeyQuotaLimitRequest{}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		channelUsageError(c, errors.New("参数错误"))
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageInvalidRequest))
 		return
 	}
 	if request.QuotaLimit < 0 {
-		channelUsageError(c, errors.New("密钥限额不能小于 0"))
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageKeyQuotaNegative))
 		return
 	}
 	if err := model.UpdateChannelKeyQuotaLimit(channelID, fingerprint, request.QuotaLimit); err != nil {
 		channelUsageError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "密钥限额已更新"})
+	common.ApiSuccessI18n(c, i18n.MsgChannelUsageKeyQuotaUpdated, nil)
 }
 
 func parseChannelUsageIDs(raw string) ([]int, error) {
 	parts := strings.Split(strings.TrimSpace(raw), ",")
 	if len(parts) == 1 && strings.TrimSpace(parts[0]) == "" {
-		return nil, errors.New("渠道 ID 不能为空")
+		return nil, common.NewLocalizedError(i18n.MsgChannelUsageChannelIdsRequired)
 	}
 	if len(parts) > maxChannelUsageBatchIDs {
-		return nil, errors.New("单次最多查询 200 个渠道")
+		return nil, common.NewLocalizedError(i18n.MsgChannelUsageMaxBatch, map[string]any{"Max": maxChannelUsageBatchIDs})
 	}
 	ids := make([]int, 0, len(parts))
 	seen := make(map[int]struct{}, len(parts))
 	for _, part := range parts {
 		id, err := strconv.Atoi(strings.TrimSpace(part))
 		if err != nil || id <= 0 {
-			return nil, errors.New("渠道 ID 格式错误")
+			return nil, common.NewLocalizedError(i18n.MsgChannelUsageChannelIdInvalid)
 		}
 		if _, exists := seen[id]; exists {
 			continue
@@ -123,7 +124,7 @@ func parseChannelUsageIDs(raw string) ([]int, error) {
 func getChannelForUsageOperation(c *gin.Context) (*model.Channel, bool) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		channelUsageError(c, errors.New("渠道 ID 格式错误"))
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageChannelIdInvalid))
 		return nil, false
 	}
 	channel, err := model.GetChannelById(id, true)
@@ -140,12 +141,12 @@ func getChannelKeyUsageIdentity(c *gin.Context) (int, string, bool) {
 		return 0, "", false
 	}
 	if !channel.ChannelInfo.IsMultiKey {
-		channelUsageError(c, errors.New("渠道不是多密钥渠道"))
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageNotMultiKey))
 		return 0, "", false
 	}
 	fingerprint := strings.TrimSpace(c.Param("fingerprint"))
 	if len(fingerprint) != 64 {
-		channelUsageError(c, errors.New("密钥指纹格式错误"))
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageKeyFingerprintInvalid))
 		return 0, "", false
 	}
 	usages, err := model.GetChannelKeyUsages(channel)
@@ -168,9 +169,8 @@ func getChannelKeyUsageIdentity(c *gin.Context) (int, string, bool) {
 }
 
 func channelUsageError(c *gin.Context, err error) {
-	message := err.Error()
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		message = "记录不存在"
+		err = common.NewLocalizedError(i18n.MsgChannelUsageRecordNotFound)
 	}
-	c.JSON(http.StatusOK, gin.H{"success": false, "message": message})
+	common.ApiError(c, err)
 }

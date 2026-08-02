@@ -1660,17 +1660,18 @@ const EditChannelModal = (props) => {
     )
       ? localInputs.quota_limit_mode
       : 'none';
+    const isTokensDisplay = getCurrencyConfig().type === 'TOKENS';
     if (localInputs.unlimited_quota || quotaLimitMode === 'none') {
       localInputs.quota_limit_mode = 'none';
       localInputs.quota_limit = 0;
     } else {
       localInputs.quota_limit_mode = quotaLimitMode;
       if (quotaLimitMode === 'channel' || quotaLimitMode === 'both') {
-        localInputs.quota_limit = displayAmountToQuota(
-          localInputs.quota_limit_amount,
-        );
+        localInputs.quota_limit = isTokensDisplay
+          ? Math.max(0, Math.round(Number(localInputs.quota_limit || 0)))
+          : displayAmountToQuota(localInputs.quota_limit_amount);
         if (localInputs.quota_limit <= 0) {
-          showError(t('请输入限额金额'));
+          showError(isTokensDisplay ? t('请输入额度') : t('请输入限额金额'));
           return;
         }
       } else {
@@ -2350,6 +2351,8 @@ const EditChannelModal = (props) => {
             const channelQuotaEnabled = ['channel', 'both'].includes(
               values?.quota_limit_mode,
             );
+            const quotaCurrencyConfig = getCurrencyConfig();
+            const isTokensDisplay = quotaCurrencyConfig.type === 'TOKENS';
             const advancedSettingsContent = (
               <div className='space-y-4'>
                 {/* Upstream Model Management Section */}
@@ -3845,45 +3848,16 @@ const EditChannelModal = (props) => {
                         }
                       />
                     </Col>
-                    <Col span={24}>
-                      <Form.InputNumber
-                        field='quota_limit_amount'
-                        label={t('金额')}
-                        prefix={getCurrencyConfig().symbol}
-                        placeholder={t('输入金额')}
-                        precision={6}
-                        disabled={unlimitedQuota || !channelQuotaEnabled}
-                        min={0}
-                        step={0.000001}
-                        onChange={handleQuotaAmountChange}
-                        style={{ width: '100%' }}
-                        showClear
-                      />
-                    </Col>
-                    <Col span={24}>
-                      <div
-                        className='text-xs cursor-pointer mt-1'
-                        style={{ color: 'var(--semi-color-text-2)' }}
-                        onClick={() => setShowQuotaInput((v) => !v)}
-                      >
-                        {showQuotaInput
-                          ? `▾ ${t('收起原生额度输入')}`
-                          : `▸ ${t('使用原生额度输入')}`}
-                      </div>
-                      <div
-                        style={{
-                          display: showQuotaInput ? 'block' : 'none',
-                        }}
-                        className='mt-2'
-                      >
+                    {isTokensDisplay ? (
+                      <Col span={24}>
                         <Form.InputNumber
                           field='quota_limit'
-                          label={t('额度')}
+                          label={t('原生额度')}
                           placeholder={t('输入额度')}
                           disabled={unlimitedQuota || !channelQuotaEnabled}
                           min={0}
                           precision={0}
-                          step={500000}
+                          step={1}
                           rules={
                             unlimitedQuota || !channelQuotaEnabled
                               ? []
@@ -3893,8 +3867,61 @@ const EditChannelModal = (props) => {
                           style={{ width: '100%' }}
                           showClear
                         />
-                      </div>
-                    </Col>
+                      </Col>
+                    ) : (
+                      <>
+                        <Col span={24}>
+                          <Form.InputNumber
+                            field='quota_limit_amount'
+                            label={t('金额')}
+                            prefix={quotaCurrencyConfig.symbol}
+                            placeholder={t('输入金额')}
+                            precision={6}
+                            disabled={unlimitedQuota || !channelQuotaEnabled}
+                            min={0}
+                            step={0.000001}
+                            onChange={handleQuotaAmountChange}
+                            style={{ width: '100%' }}
+                            showClear
+                          />
+                        </Col>
+                        <Col span={24}>
+                          <div
+                            className='text-xs cursor-pointer mt-1'
+                            style={{ color: 'var(--semi-color-text-2)' }}
+                            onClick={() => setShowQuotaInput((v) => !v)}
+                          >
+                            {showQuotaInput
+                              ? `▾ ${t('收起原生额度输入')}`
+                              : `▸ ${t('使用原生额度输入')}`}
+                          </div>
+                          <div
+                            style={{
+                              display: showQuotaInput ? 'block' : 'none',
+                            }}
+                            className='mt-2'
+                          >
+                            <Form.InputNumber
+                              field='quota_limit'
+                              label={t('额度')}
+                              placeholder={t('输入额度')}
+                              disabled={unlimitedQuota || !channelQuotaEnabled}
+                              min={0}
+                              precision={0}
+                              step={1}
+                              rules={
+                                unlimitedQuota || !channelQuotaEnabled
+                                  ? []
+                                  : [{ required: true, message: t('请输入额度') }]
+                              }
+                              onChange={handleQuotaLimitChange}
+                              style={{ width: '100%' }}
+                              showClear
+                            />
+                          </div>
+                        </Col>
+                      </>
+                    )}
                     <Col span={24}>
                       <Form.Switch
                         field='unlimited_quota'

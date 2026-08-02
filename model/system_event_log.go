@@ -8,6 +8,7 @@ type SystemEventLog struct {
 	Level      string `json:"level" gorm:"size:16;not null;index:idx_system_event_level_time,priority:1"`
 	Component  string `json:"component" gorm:"size:64;not null;index:idx_system_event_component_time,priority:1"`
 	Message    string `json:"message" gorm:"type:text;not null"`
+	MessageKey string `json:"message_key,omitempty" gorm:"size:128;index"`
 	RequestId  string `json:"request_id" gorm:"size:64;index"`
 	ChannelId  int    `json:"channel_id" gorm:"index"`
 	ModelName  string `json:"model_name" gorm:"size:128;index"`

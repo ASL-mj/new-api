@@ -83,6 +83,10 @@ func newMonitorRunnerState(t *testing.T, workerCount int) *monitorGroupRunnerSta
 
 func TestMonitorGroupRunnerRecordsOperationalDegradedAndTimeoutChecks(t *testing.T) {
 	prepareMonitorRunnerTables(t)
+	events := make([]model.SystemEventLog, 0, 2)
+	recordMonitorSystemEvent = func(event model.SystemEventLog) {
+		events = append(events, event)
+	}
 
 	channel := &model.Channel{Type: 1, Key: "test-key", Name: "test channel", Models: "gpt-5.4,gpt-5.4-mini"}
 	require.NoError(t, model.DB.Create(channel).Error)
@@ -118,6 +122,10 @@ func TestMonitorGroupRunnerRecordsOperationalDegradedAndTimeoutChecks(t *testing
 	assert.Equal(t, model.MonitorCheckStatusOperational, checks[0].Status)
 	assert.Equal(t, "gpt-5.4", checks[0].ModelName)
 	assert.Equal(t, model.MonitorCheckStatusDegraded, checks[1].Status)
+	require.Len(t, events, 2)
+	assert.Equal(t, "system_event.monitor_probe_started", events[0].MessageKey)
+	assert.Equal(t, "system_event.monitor_probe_completed", events[1].MessageKey)
+	assert.Contains(t, events[1].Extra, `"operational":1`)
 	assert.Equal(t, "gpt-5.4-mini", checks[1].ModelName)
 	assert.Equal(t, model.MonitorCheckStatusTimeout, checks[2].Status)
 	assert.Equal(t, "timeout", checks[2].ErrorCode)

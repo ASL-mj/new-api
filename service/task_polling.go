@@ -222,29 +222,47 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 
 	for _, responseItem := range responseItems.Data {
 		task := taskM[responseItem.TaskID]
-		if !taskNeedsUpdate(task, responseItem) {
-			continue
-		}
-
-		task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
-		task.FailReason = lo.If(responseItem.FailReason != "", responseItem.FailReason).Else(task.FailReason)
-		task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
-		task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
-		task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
-		if responseItem.FailReason != "" || task.Status == model.TaskStatusFailure {
-			logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
-			task.Progress = "100%"
-			RefundTaskQuota(ctx, task, task.FailReason)
-		}
-		if responseItem.Status == model.TaskStatusSuccess {
-			task.Progress = "100%"
-		}
-		task.Data = responseItem.Data
-
-		err = task.Update()
-		if err != nil {
+		if err = updateSunoTaskFromResponse(ctx, task, responseItem); err != nil {
 			common.SysLog("UpdateSunoTask task error: " + err.Error())
 		}
+	}
+	return nil
+}
+
+func updateSunoTaskFromResponse(ctx context.Context, task *model.Task, responseItem dto.SunoDataResponse) error {
+	if task == nil {
+		return fmt.Errorf("suno task %s not found", responseItem.TaskID)
+	}
+	if !taskNeedsUpdate(task, responseItem) {
+		return nil
+	}
+
+	previousStatus := task.Status
+	task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
+	task.FailReason = lo.If(responseItem.FailReason != "", responseItem.FailReason).Else(task.FailReason)
+	task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
+	task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
+	task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
+	shouldRefund := task.Status == model.TaskStatusFailure && previousStatus != model.TaskStatusFailure && task.Quota != 0
+	if responseItem.FailReason != "" || task.Status == model.TaskStatusFailure {
+		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
+		task.Progress = "100%"
+	}
+	if responseItem.Status == model.TaskStatusSuccess {
+		task.Progress = "100%"
+	}
+	task.Data = responseItem.Data
+
+	won, err := task.UpdateWithStatus(previousStatus)
+	if err != nil {
+		return err
+	}
+	if !won {
+		logger.LogWarn(ctx, fmt.Sprintf("Suno task %s already transitioned by another process, skip billing", task.TaskID))
+		return nil
+	}
+	if shouldRefund {
+		RefundTaskQuota(ctx, task, task.FailReason)
 	}
 	return nil
 }
@@ -541,6 +559,15 @@ func truncateBase64(s string) string {
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+	if task == nil || taskResult == nil {
+		return
+	}
+
+	// Token 用量是独立统计维度，不能因按次计费或 adaptor 差额结算提前返回而丢失。
+	if taskResult.TotalTokens > 0 {
+		taskAdjustChannelUsage(ctx, task, 0, int64(taskResult.TotalTokens))
+	}
+
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))

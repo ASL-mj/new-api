@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -289,9 +290,11 @@ func recordFinalRelaySystemEvent(relayInfo *relaycommon.RelayInfo, relayErr *typ
 	if relayInfo.ChannelMeta != nil {
 		channelId = relayInfo.ChannelId
 	}
+	extra, _ := common.Marshal(map[string]any{"error_code": relayErr.GetErrorCode()})
 	recordRelaySystemEvent(model.SystemEventLog{
 		CreatedAt: common.GetTimestamp(), Level: "error", Component: "relay",
-		Message:   fmt.Sprintf("上游请求最终失败（错误码：%s）", relayErr.GetErrorCode()),
+		Message:    fmt.Sprintf("上游请求最终失败（错误码：%s）", relayErr.GetErrorCode()),
+		MessageKey: i18n.MsgSystemEventUpstreamFinalFailure, Extra: string(extra),
 		RequestId: relayInfo.RequestId, ChannelId: channelId, ModelName: relayInfo.OriginModelName,
 		Group: relayInfo.UsingGroup, StatusCode: relayErr.StatusCode,
 		LatencyMs: time.Since(relayInfo.StartTime).Milliseconds(),
@@ -659,9 +662,10 @@ func RelayTask(c *gin.Context) {
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
-		service.LogTaskConsumption(c, relayInfo)
+		usageRecordedAt := service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
+		task.PrivateData.ChannelUsageRecordedAt = usageRecordedAt.Unix()
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId

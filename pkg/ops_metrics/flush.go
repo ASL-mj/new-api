@@ -36,13 +36,13 @@ func flushLoop() {
 		if flushSucceeded {
 			common.MarkJobHeartbeat("ops_metrics_flush", "ok", "")
 			if wasFailing {
-				recordOpsSystemEvent("info", "运维指标刷盘已恢复")
+				recordOpsSystemEvent("info", opsFlushRecoveredMessageKey, "运维指标刷盘已恢复")
 				wasFailing = false
 			}
 		} else {
 			common.MarkJobHeartbeat("ops_metrics_flush", "error", "metrics flush failed; counters restored")
 			if !wasFailing {
-				recordOpsSystemEvent("error", "运维指标刷盘失败，内存计数已保留并将自动重试")
+				recordOpsSystemEvent("error", opsFlushFailedMessageKey, "运维指标刷盘失败，内存计数已保留并将自动重试")
 				wasFailing = true
 			}
 		}

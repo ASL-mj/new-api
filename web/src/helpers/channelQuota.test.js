@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { getCurrencyConfig } from './currency';
 import { displayAmountToQuota, quotaToDisplayAmount } from './channelQuota';
 
 const storage = new Map();
@@ -73,6 +74,7 @@ describe('channel quota amount conversion', () => {
   test('keeps TOKENS display in the native integer quota unit', () => {
     setQuotaDisplay({ type: 'TOKENS' });
 
+    expect(getCurrencyConfig().symbol).toBe('');
     expect(quotaToDisplayAmount(123456)).toBe(123456);
     expect(displayAmountToQuota(123456.4)).toBe(123456);
   });
@@ -86,5 +88,48 @@ describe('channel quota amount conversion', () => {
     expect(displayAmountToQuota(0)).toBe(0);
     expect(displayAmountToQuota('invalid')).toBe(0);
     expect(displayAmountToQuota(-1)).toBe(0);
+  });
+
+  test('falls back to the stable CNY exchange rate for invalid values', () => {
+    const invalidCases = [
+      { usd_exchange_rate: 0 },
+      { usd_exchange_rate: -2 },
+      { usd_exchange_rate: 'NaN' },
+      { usd_exchange_rate: 'Infinity' },
+    ];
+
+    for (const status of invalidCases) {
+      setQuotaDisplay({
+        type: 'CNY',
+        status,
+      });
+
+      expect(getCurrencyConfig().rate).toBe(7);
+      expect(quotaToDisplayAmount(500000)).toBe(7);
+      expect(displayAmountToQuota(14)).toBe(1000000);
+    }
+  });
+
+  test('falls back to the stable custom exchange rate for invalid values', () => {
+    const invalidCases = [
+      { custom_currency_exchange_rate: 0, custom_currency_symbol: 'S' },
+      { custom_currency_exchange_rate: -2, custom_currency_symbol: 'S' },
+      { custom_currency_exchange_rate: 'NaN', custom_currency_symbol: 'S' },
+      {
+        custom_currency_exchange_rate: 'Infinity',
+        custom_currency_symbol: 'S',
+      },
+    ];
+
+    for (const status of invalidCases) {
+      setQuotaDisplay({
+        type: 'CUSTOM',
+        status,
+      });
+
+      expect(getCurrencyConfig().rate).toBe(1);
+      expect(quotaToDisplayAmount(500000)).toBe(1);
+      expect(displayAmountToQuota(2)).toBe(1000000);
+    }
   });
 });

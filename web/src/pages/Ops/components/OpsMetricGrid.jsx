@@ -35,16 +35,16 @@ const latency = (value) => {
 const count = (value) => Number(value || 0).toLocaleString();
 const rate = (value) => Number(value || 0).toFixed(1);
 
-const percentileRows = (data) => [
+const percentileRows = (data, t) => [
   {
     label: 'P95 / P90',
     value: `${latency(data?.p95_ms)} / ${latency(data?.p90_ms)} ms`,
   },
   {
-    label: 'P50 / Avg',
+    label: `P50 / ${t('平均')}`,
     value: `${latency(data?.p50_ms)} / ${latency(data?.average_ms)} ms`,
   },
-  { label: 'Max', value: `${latency(data?.max_ms)} ms` },
+  { label: t('最大值'), value: `${latency(data?.max_ms)} ms` },
 ];
 
 export const buildOpsMetricItems = (overview, t) => {
@@ -56,11 +56,11 @@ export const buildOpsMetricItems = (overview, t) => {
     {
       key: 'requests',
       title: t('所有请求'),
-      tip: '统计选定时间范围内的全部请求、Token、平均 QPS 与 TPS。',
+      tip: t('统计选定时间范围内的全部请求、Token、平均 QPS 与 TPS。'),
       layout: 'rows',
       rows: [
         { label: t('请求数'), value: count(overview?.request_count) },
-        { label: 'Token 数', value: count(overview?.token_count) },
+        { label: t('Token 数'), value: count(overview?.token_count) },
         { label: t('平均 QPS'), value: rate(overview?.qps?.average) },
         { label: t('平均 TPS'), value: rate(overview?.tps?.average) },
       ],
@@ -68,19 +68,19 @@ export const buildOpsMetricItems = (overview, t) => {
     {
       key: 'sla',
       title: t('SLA 请求'),
-      tip: 'SLA 统计排除业务限制后的有效请求质量。',
+      tip: t('SLA 统计排除业务限制后的有效请求质量。'),
       value: percent(overview?.sla),
       tone: Number(overview?.sla || 0) >= 99 ? 'success' : 'danger',
       progress: Number(overview?.sla || 0),
       rows: [
         { label: t('异常数'), value: count(overview?.error_count) },
-        { label: 'SLA 样本', value: count(overview?.sla_sample_count) },
+        { label: t('SLA 样本'), value: count(overview?.sla_sample_count) },
       ],
     },
     {
       key: 'errors',
       title: t('错误请求'),
-      tip: '统计请求失败比例，并区分普通错误与业务额度限制。',
+      tip: t('统计请求失败比例，并区分普通错误与业务额度限制。'),
       value: percent(overview?.error_rate),
       tone: Number(overview?.error_rate || 0) > 1 ? 'danger' : 'success',
       rows: [
@@ -94,23 +94,23 @@ export const buildOpsMetricItems = (overview, t) => {
     {
       key: 'duration',
       title: t('请求时长'),
-      tip: '请求从进入 NewAPI 到完成响应的耗时分布。',
+      tip: t('请求从进入 NewAPI 到完成响应的耗时分布。'),
       value: latency(overview?.duration?.p99_ms),
       unit: 'ms P99',
-      rows: percentileRows(overview?.duration),
+      rows: percentileRows(overview?.duration, t),
     },
     {
       key: 'ttft',
       title: 'TTFT',
-      tip: 'Time To First Token，首个输出 Token 到达前的等待时间。',
+      tip: t('Time To First Token，首个输出 Token 到达前的等待时间。'),
       value: latency(overview?.ttft?.p99_ms),
       unit: 'ms P99',
-      rows: percentileRows(overview?.ttft),
+      rows: percentileRows(overview?.ttft, t),
     },
     {
       key: 'upstream',
       title: t('上游错误请求'),
-      tip: '统计上游服务错误，并单独列出 429 与 529。',
+      tip: t('统计上游服务错误，并单独列出 429 与 529。'),
       value: percent(overview?.upstream_error_rate),
       tone: upstreamTotal > 0 ? 'warning' : 'success',
       rows: [

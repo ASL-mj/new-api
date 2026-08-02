@@ -144,4 +144,6 @@ func TestRecordTaskOpsResultRecordsTaskOutcomeAndUpstreamEvent(t *testing.T) {
 	assert.Equal(t, "relay", event.Component)
 	assert.Equal(t, 12, event.ChannelId)
 	assert.Equal(t, http.StatusBadGateway, event.StatusCode)
+	assert.Equal(t, "system_event.upstream_final_failure", event.MessageKey)
+	assert.Contains(t, event.Extra, "upstream_task_failed")
 }

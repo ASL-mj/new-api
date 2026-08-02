@@ -6,11 +6,10 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
-
-const channelQuotaDisabledReason = "channel quota limit reached"
 
 var recordChannelUsageSystemEvent = RecordSystemEvent
 
@@ -29,6 +28,10 @@ type ChannelUsageRecordParams struct {
 }
 
 func RecordRelayChannelUsage(relayInfo *relaycommon.RelayInfo, quota int, tokenUsed int64, requestCount int64) error {
+	return RecordRelayChannelUsageAt(relayInfo, quota, tokenUsed, requestCount, time.Time{})
+}
+
+func RecordRelayChannelUsageAt(relayInfo *relaycommon.RelayInfo, quota int, tokenUsed int64, requestCount int64, now time.Time) error {
 	if relayInfo == nil {
 		return nil
 	}
@@ -41,6 +44,7 @@ func RecordRelayChannelUsage(relayInfo *relaycommon.RelayInfo, quota int, tokenU
 		ModelName:    relayInfo.OriginModelName,
 		Group:        relayInfo.UsingGroup,
 		RequestID:    relayInfo.RequestId,
+		Now:          now,
 	}
 	if selectedKey, keyIndex, ok := relayInfo.GetChannelUsageIdentity(); ok {
 		params.SelectedKey = selectedKey
@@ -104,6 +108,41 @@ func RecordChannelUsage(params ChannelUsageRecordParams) error {
 	return nil
 }
 
+type ChannelUsageDeltaRecordParams struct {
+	ChannelID      int
+	KeyFingerprint string
+	KeyIndex       int
+	HasKeyIdentity bool
+	QuotaDelta     int
+	TokenUsedDelta int64
+	RequestDelta   int64
+	Now            time.Time
+}
+
+func RecordChannelUsageDelta(params ChannelUsageDeltaRecordParams) error {
+	if params.ChannelID <= 0 {
+		return fmt.Errorf("invalid channel id: %d", params.ChannelID)
+	}
+	if params.QuotaDelta == 0 && params.TokenUsedDelta == 0 && params.RequestDelta == 0 {
+		return nil
+	}
+	if params.Now.IsZero() {
+		params.Now = time.Now()
+	}
+
+	_, err := model.ApplyChannelUsageDelta(model.ChannelUsageDeltaParams{
+		ChannelID:      params.ChannelID,
+		KeyFingerprint: strings.TrimSpace(params.KeyFingerprint),
+		KeyIndex:       params.KeyIndex,
+		HasKeyIdentity: params.HasKeyIdentity && strings.TrimSpace(params.KeyFingerprint) != "",
+		QuotaDelta:     params.QuotaDelta,
+		TokenUsedDelta: params.TokenUsedDelta,
+		RequestDelta:   params.RequestDelta,
+		Now:            params.Now,
+	})
+	return err
+}
+
 func propagateChannelAutoDisabled(channelID int) {
 	if err := model.UpdateAbilityStatus(channelID, false); err != nil {
 		common.SysLog(fmt.Sprintf("failed to disable abilities for exhausted channel: channel_id=%d, error=%v", channelID, err))
@@ -115,6 +154,7 @@ func recordKeyQuotaExhaustedEvent(params ChannelUsageRecordParams, result model.
 	recordChannelUsageEvent(
 		"warn",
 		"渠道 Key 已因额度耗尽自动禁用",
+		i18n.MsgSystemEventKeyQuotaExhausted,
 		params,
 		map[string]interface{}{
 			"event":            "key_quota_exhausted",
@@ -128,7 +168,7 @@ func recordKeyQuotaExhaustedEvent(params ChannelUsageRecordParams, result model.
 }
 
 func recordChannelQuotaExhaustedEvent(params ChannelUsageRecordParams, result model.ChannelUsageSettlementResult) {
-	reason := channelQuotaDisabledReason
+	reason := model.ChannelQuotaDisabledReason
 	extra := map[string]interface{}{
 		"event":            "channel_quota_exhausted",
 		"reason":           reason,
@@ -142,19 +182,23 @@ func recordChannelQuotaExhaustedEvent(params ChannelUsageRecordParams, result mo
 		extra["key_fingerprint"] = result.Key.KeyFingerprint
 	}
 
-	recordChannelUsageEvent("warn", "渠道已因额度耗尽自动禁用", params, extra)
+	recordChannelUsageEvent(
+		"warn", "渠道已因额度耗尽自动禁用",
+		i18n.MsgSystemEventChannelQuotaExhausted, params, extra,
+	)
 }
 
-func recordChannelUsageEvent(level string, message string, params ChannelUsageRecordParams, extra map[string]interface{}) {
+func recordChannelUsageEvent(level, message, messageKey string, params ChannelUsageRecordParams, extra map[string]interface{}) {
 	event := model.SystemEventLog{
-		CreatedAt: common.GetTimestamp(),
-		Level:     level,
-		Component: "channel_usage",
-		Message:   message,
-		RequestId: params.RequestID,
-		ChannelId: params.ChannelID,
-		ModelName: params.ModelName,
-		Group:     params.Group,
+		CreatedAt:  common.GetTimestamp(),
+		Level:      level,
+		Component:  "channel_usage",
+		Message:    message,
+		MessageKey: messageKey,
+		RequestId:  params.RequestID,
+		ChannelId:  params.ChannelID,
+		ModelName:  params.ModelName,
+		Group:      params.Group,
 	}
 	if len(extra) > 0 {
 		if payload, err := common.Marshal(extra); err == nil {

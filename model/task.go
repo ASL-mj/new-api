@@ -100,6 +100,10 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// 渠道结算身份：异步任务只持久化安全指纹与 key index，不保存原始选中 key。
+	ChannelKeyFingerprint  string `json:"channel_key_fingerprint,omitempty"`
+	ChannelKeyIndex        int    `json:"channel_key_index,omitempty"`
+	ChannelUsageRecordedAt int64  `json:"channel_usage_recorded_at,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -176,6 +180,12 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
+		}
+		if selectedKey, keyIndex, ok := relayInfo.GetChannelUsageIdentity(); ok {
+			if fingerprint, err := FingerprintChannelKey(selectedKey); err == nil {
+				privateData.ChannelKeyFingerprint = fingerprint
+				privateData.ChannelKeyIndex = keyIndex
+			}
 		}
 		if relayInfo.UpstreamModelName != "" {
 			properties.UpstreamModelName = relayInfo.UpstreamModelName
@@ -399,6 +409,14 @@ func (Task *Task) Update() error {
 	var err error
 	err = DB.Save(Task).Error
 	return err
+}
+
+func (t *Task) UpdateQuota(quota int) error {
+	t.Quota = quota
+	if t.ID == 0 || DB == nil {
+		return nil
+	}
+	return DB.Model(&Task{}).Where("id = ?", t.ID).Update("quota", quota).Error
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

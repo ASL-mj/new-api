@@ -77,9 +77,9 @@ const availabilityColor = (value) => {
   return 'var(--semi-color-danger)';
 };
 
-const ProviderBadge = ({ group }) => {
+const ProviderBadge = ({ group, t }) => {
   const types = group.channel_types || [];
-  const provider = types.join(' / ') || '自定义渠道';
+  const provider = types.join(' / ') || t('自定义渠道');
   const iconName = getMonitorProviderIconName(types);
   return (
     <div
@@ -112,7 +112,7 @@ const MonitorStatusCard = ({ group, onOpen, t, refreshAfter }) => {
       tabIndex={0}
     >
       <div className='flex items-start gap-3'>
-        <ProviderBadge group={group} />
+        <ProviderBadge group={group} t={t} />
         <div className='min-w-0 flex-1'>
           <Typography.Title
             heading={6}
@@ -171,7 +171,7 @@ const MonitorStatusCard = ({ group, onOpen, t, refreshAfter }) => {
           style={{ color: 'var(--semi-color-text-2)' }}
         >
           <span>{t('近 60 次记录')}</span>
-          <span>{formatMonitorRefresh(refreshAfter)}</span>
+          <span>{formatMonitorRefresh(refreshAfter, t)}</span>
         </div>
         <MonitorTimeline timeline={group.timeline} t={t} />
       </div>

@@ -17,11 +17,16 @@ import (
 )
 
 func performChannelUsageRequest(t *testing.T, method, target, body string, params map[string]string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
+	return performChannelUsageRequestWithLanguage(t, method, target, body, params, "zh-CN", handler)
+}
+
+func performChannelUsageRequestWithLanguage(t *testing.T, method, target, body string, params map[string]string, language string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("Accept-Language", language)
 	for key, value := range params {
 		ctx.AddParam(key, value)
 	}
@@ -133,4 +138,30 @@ func TestChannelQuotaConfigurationValidation(t *testing.T) {
 		Key: "sk-a\nsk-b", QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
 		ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
 	}, true))
+}
+
+func TestChannelUsageAPIMessagesAreLocalized(t *testing.T) {
+	db := setupChannelQuotaGuardControllerTestDB(t)
+	channel := &model.Channel{
+		Id: 504, Name: "localized-quota", Key: "sk-localized",
+		QuotaLimitMode: model.ChannelQuotaLimitModeChannel, QuotaLimit: 100, QuotaLimitUsed: 50,
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	reset := performChannelUsageRequestWithLanguage(
+		t, http.MethodPost, "/api/channel/504/quota/reset", "",
+		map[string]string{"id": "504"}, "en", ResetChannelQuotaUsage,
+	)
+	resetResponse := decodeChannelQuotaGuardResponse(t, reset.Body.String())
+	assert.Equal(t, "Channel quota usage has been reset", resetResponse["message"])
+
+	english := performChannelUsageRequestWithLanguage(
+		t, http.MethodGet, "/api/channel/usage/batch?ids=", "", nil, "en", GetChannelUsageBatch,
+	)
+	assert.Contains(t, english.Body.String(), "Channel IDs cannot be empty")
+
+	traditional := performChannelUsageRequestWithLanguage(
+		t, http.MethodGet, "/api/channel/usage/batch?ids=", "", nil, "zh-TW", GetChannelUsageBatch,
+	)
+	assert.Contains(t, traditional.Body.String(), "管道 ID 不能為空")
 }

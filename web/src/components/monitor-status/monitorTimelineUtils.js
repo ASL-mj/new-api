@@ -116,7 +116,7 @@ export const monitorTimelineHeight = (status) => {
   }
 };
 
-export const formatMonitorRefresh = (seconds) => {
+export const formatMonitorRefresh = (seconds, t) => {
   const value = Math.max(0, Number(seconds) || 0);
-  return `${value}s 后刷新`;
+  return t('{{seconds}} s 后刷新', { seconds: value });
 };

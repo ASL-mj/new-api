@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,6 +183,73 @@ func getSubscriptionUsed(t *testing.T, id int) int64 {
 	return sub.AmountUsed
 }
 
+func getChannelQuotaState(t *testing.T, channelID int) model.Channel {
+	t.Helper()
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	return channel
+}
+
+func getChannelKeyUsageByFingerprint(t *testing.T, channelID int, fingerprint string) model.ChannelKeyUsage {
+	t.Helper()
+	var usage model.ChannelKeyUsage
+	require.NoError(t, model.DB.Where("channel_id = ? AND key_fingerprint = ?", channelID, fingerprint).First(&usage).Error)
+	return usage
+}
+
+func getChannelKeyUsageByIndex(t *testing.T, channelID int, keyIndex int) model.ChannelKeyUsage {
+	t.Helper()
+	var usage model.ChannelKeyUsage
+	require.NoError(t, model.DB.Where("channel_id = ? AND key_index = ?", channelID, keyIndex).First(&usage).Error)
+	return usage
+}
+
+func requireNoChannelUsageDailyRow(t *testing.T, channelID int, keyFingerprint string, usageDate string) {
+	t.Helper()
+	var row model.ChannelUsageDaily
+	err := model.DB.Where("channel_id = ? AND key_fingerprint = ? AND usage_date = ?", channelID, keyFingerprint, usageDate).First(&row).Error
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func seedTaskBillingUsageChannel(t *testing.T, channel *model.Channel) []*model.ChannelKeyUsage {
+	t.Helper()
+	seedChannelUsageTestChannel(t, channel)
+	usages, err := model.EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	ordered := make([]*model.ChannelKeyUsage, 0, len(channel.GetKeys()))
+	for idx := range channel.GetKeys() {
+		if usage, ok := usages[idx]; ok && usage != nil {
+			ordered = append(ordered, usage)
+		}
+	}
+	return ordered
+}
+
+func applyTaskPreconsume(t *testing.T, when time.Time, task *model.Task, selectedKey string, keyIndex int) string {
+	t.Helper()
+	task.PrivateData.ChannelUsageRecordedAt = when.Unix()
+	params := ChannelUsageRecordParams{
+		ChannelID:      task.ChannelId,
+		Quota:          task.Quota,
+		RequestCount:   1,
+		Now:            when,
+		ModelName:      task.Properties.OriginModelName,
+		Group:          task.Group,
+		HasKeyIdentity: strings.TrimSpace(selectedKey) != "",
+		SelectedKey:    selectedKey,
+		KeyIndex:       keyIndex,
+	}
+	require.NoError(t, RecordChannelUsage(params))
+
+	fingerprint := ""
+	if strings.TrimSpace(selectedKey) != "" {
+		var err error
+		fingerprint, err = model.FingerprintChannelKey(selectedKey)
+		require.NoError(t, err)
+	}
+	return fingerprint
+}
+
 func getLastLog(t *testing.T) *model.Log {
 	t.Helper()
 	var log model.Log
@@ -302,6 +370,52 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestRefundTaskQuota_RollsBackChannelQuotaToZero(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 5, 5, 105
+	const preConsumed = 60
+	when := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-refund-channel", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-refund-channel",
+		Key:            "sk-refund-channel",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "test-model",
+	}
+	seedTaskBillingUsageChannel(t, channel)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-refund-channel", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	RefundTaskQuota(ctx, task, "task failed")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, 0, reloaded.UsedQuota)
+	assert.EqualValues(t, 0, reloaded.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, 0, keyUsage.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, keyUsage.Status)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channelID, "", usageDate)
+	assert.EqualValues(t, 0, summary.Quota)
+	assert.EqualValues(t, 1, summary.RequestCount)
+	detail := getChannelUsageDailyRow(t, channelID, task.PrivateData.ChannelKeyFingerprint, usageDate)
+	assert.EqualValues(t, 0, detail.Quota)
+	assert.EqualValues(t, 1, detail.RequestCount)
 }
 
 // ===========================================================================
@@ -509,6 +623,360 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 }
 
+func TestRecalculateTaskQuota_NegativeDeltaAdjustsFinalChannelQuota(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 15, 15, 115
+	const preConsumed = 70
+	const actualQuota = 25
+	when := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-recalc-final-less", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-final-less",
+		Key:            "sk-recalc-final-less",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "test-model",
+	}
+	seedTaskBillingUsageChannel(t, channel)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-recalc-final-less", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "less than preconsume")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, actualQuota, reloaded.UsedQuota)
+	assert.EqualValues(t, actualQuota, reloaded.QuotaLimitUsed)
+
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, actualQuota, keyUsage.QuotaLimitUsed)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channelID, "", usageDate)
+	assert.EqualValues(t, actualQuota, summary.Quota)
+	assert.EqualValues(t, 1, summary.RequestCount)
+	detail := getChannelUsageDailyRow(t, channelID, task.PrivateData.ChannelKeyFingerprint, usageDate)
+	assert.EqualValues(t, actualQuota, detail.Quota)
+	assert.EqualValues(t, 1, detail.RequestCount)
+}
+
+func TestRecalculateTaskQuota_PositiveDeltaAdjustsFinalChannelQuota(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 16, 16, 116
+	const preConsumed = 30
+	const actualQuota = 80
+	when := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-recalc-final-more", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-final-more",
+		Key:            "sk-recalc-final-more",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     200,
+		Group:          "default",
+		Models:         "test-model",
+	}
+	seedTaskBillingUsageChannel(t, channel)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-recalc-final-more", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "more than preconsume")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, actualQuota, reloaded.UsedQuota)
+	assert.EqualValues(t, actualQuota, reloaded.QuotaLimitUsed)
+
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, actualQuota, keyUsage.QuotaLimitUsed)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channelID, "", usageDate)
+	assert.EqualValues(t, actualQuota, summary.Quota)
+	assert.EqualValues(t, 1, summary.RequestCount)
+	detail := getChannelUsageDailyRow(t, channelID, task.PrivateData.ChannelKeyFingerprint, usageDate)
+	assert.EqualValues(t, actualQuota, detail.Quota)
+	assert.EqualValues(t, 1, detail.RequestCount)
+}
+
+func TestTaskBillingUsesPersistedFingerprintForMultiKeySettlement(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 17, 17, 117
+	const preConsumed = 40
+	const actualQuota = 10
+	when := time.Date(2026, 8, 2, 13, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-multi-key", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-multi-key",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 2)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[1].KeyFingerprint, 100))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-beta", 1)
+	task.PrivateData.ChannelKeyIndex = 1
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "settle on beta")
+
+	alphaUsage := getChannelKeyUsageByIndex(t, channelID, 0)
+	betaUsage := getChannelKeyUsageByIndex(t, channelID, 1)
+	assert.EqualValues(t, 0, alphaUsage.QuotaLimitUsed)
+	assert.EqualValues(t, actualQuota, betaUsage.QuotaLimitUsed)
+	assert.Equal(t, task.PrivateData.ChannelKeyFingerprint, betaUsage.KeyFingerprint)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channelID, "", usageDate)
+	assert.EqualValues(t, actualQuota, summary.Quota)
+	requireNoChannelUsageDailyRow(t, channelID, alphaUsage.KeyFingerprint, usageDate)
+	detail := getChannelUsageDailyRow(t, channelID, betaUsage.KeyFingerprint, usageDate)
+	assert.EqualValues(t, actualQuota, detail.Quota)
+}
+
+func TestRefundTaskQuota_RollsBackUsageAfterQuotaModeIsDisabled(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 18, 18, 118
+	const preConsumed = 35
+	when := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-mode-change", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-mode-change",
+		Key:            "sk-mode-change",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     100,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, 100))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-mode-change", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channelID).Update("quota_limit_mode", model.ChannelQuotaLimitModeNone).Error)
+
+	RefundTaskQuota(ctx, task, "task failed after quota mode change")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, 0, reloaded.UsedQuota)
+	assert.EqualValues(t, 0, reloaded.QuotaLimitUsed)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, 0, keyUsage.QuotaLimitUsed)
+}
+
+func TestRecalculateTaskQuota_PositiveDeltaDisablesLastExhaustedKey(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 19, 19, 119
+	const preConsumed = 5
+	const actualQuota = 12
+	when := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-final-exhaust", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-final-exhaust",
+		Key:            "sk-final-exhaust",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, 10))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-final-exhaust", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "final quota exhausted key")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, actualQuota, keyUsage.QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, keyUsage.Status)
+}
+
+func TestRecalculateTaskQuota_NegativeDeltaReenablesKeyOnlyChannelAfterPositiveDeltaExhaustion(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 26, 26, 126
+	const preConsumed = 5
+	const exhaustedQuota = 12
+	when := time.Date(2026, 8, 2, 17, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-delta-reenable", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-delta-reenable",
+		Key:            "sk-delta-reenable",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, 10))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, channel.Key, 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	RecalculateTaskQuota(ctx, task, exhaustedQuota, "exhaust key after settlement")
+	assert.Equal(t, common.ChannelStatusAutoDisabled, getChannelQuotaState(t, channelID).Status)
+
+	RecalculateTaskQuota(ctx, task, preConsumed, "refund settlement delta")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.Equal(t, common.ChannelStatusEnabled, keyUsage.Status)
+	assert.EqualValues(t, preConsumed, keyUsage.QuotaLimitUsed)
+}
+
+func TestRefundTaskQuota_ReenablesAutoDisabledChannelAndKeyAfterPreconsumeRollback(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 20, 20, 120
+	const preConsumed = 20
+	when := time.Date(2026, 8, 2, 14, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-reenable", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-reenable",
+		Key:            "sk-task-reenable",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     20,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, preConsumed))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-task-reenable", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	beforeRefund := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, beforeRefund.Status)
+
+	RefundTaskQuota(ctx, task, "upstream failed")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	assert.EqualValues(t, 0, reloaded.QuotaLimitUsed)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.Equal(t, common.ChannelStatusEnabled, keyUsage.Status)
+	assert.EqualValues(t, 0, keyUsage.QuotaLimitUsed)
+}
+
+func TestRefundTaskQuota_ReenablesKeyOnlyChannelAfterPreconsumeRollback(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 24, 24, 124
+	const preConsumed = 20
+	when := time.Date(2026, 8, 2, 15, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-key-only-reenable", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-key-only-reenable",
+		Key:            "sk-task-key-only-reenable",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, preConsumed))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, channel.Key, 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	beforeRefund := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, beforeRefund.Status)
+
+	RefundTaskQuota(ctx, task, "upstream failed")
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.Equal(t, common.ChannelStatusEnabled, keyUsage.Status)
+	assert.EqualValues(t, 0, keyUsage.QuotaLimitUsed)
+}
+
 // ===========================================================================
 // CAS + Billing integration tests
 // Simulates the flow in updateVideoSingleTask (service/task_polling.go)
@@ -593,6 +1061,44 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestCASGuardedFailureBillingDoesNotDoubleRollbackChannelUsage(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 22, 22, 122
+	const preConsumed = 50
+	when := time.Date(2026, 8, 2, 15, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-cas-channel", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-cas-channel",
+		Key:            "sk-cas-channel",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeBoth,
+		QuotaLimit:     200,
+		Group:          "default",
+		Models:         "test-model",
+	}
+	seedTaskBillingUsageChannel(t, channel)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatus(model.TaskStatusInProgress)
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-cas-channel", 0)
+	task.PrivateData.ChannelKeyIndex = 0
+	require.NoError(t, model.DB.Create(task).Error)
+
+	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusFailure), 0)
+	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusFailure), 0)
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, 0, reloaded.UsedQuota)
+	assert.EqualValues(t, 0, reloaded.QuotaLimitUsed)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, 0, keyUsage.QuotaLimitUsed)
 }
 
 func TestCASGuardedRefund_Lose(t *testing.T) {
@@ -762,6 +1268,61 @@ func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, preConsumed, task.Quota)
 	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestSettle_PerCallBilling_RecordsTokensWithoutConsumingTokenCountAsQuota(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 25, 25, 125
+	const preConsumed = 40
+	const totalTokens = 100000
+	when := time.Date(2026, 8, 2, 16, 0, 0, 0, time.UTC)
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-token-stats", 1000)
+	channel := &model.Channel{
+		Id:             channelID,
+		Name:           "task-token-stats",
+		Key:            "sk-task-token-stats",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "test-model",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 1,
+		},
+	}
+	usages := seedTaskBillingUsageChannel(t, channel)
+	require.Len(t, usages, 1)
+	require.NoError(t, model.UpdateChannelKeyQuotaLimit(channelID, usages[0].KeyFingerprint, 100))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.PerCallBilling = true
+	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, channel.Key, 0)
+	task.PrivateData.ChannelKeyIndex = 0
+
+	settleTaskBillingOnComplete(
+		ctx,
+		&mockAdaptor{},
+		task,
+		&relaycommon.TaskInfo{Status: model.TaskStatusSuccess, TotalTokens: totalTokens},
+	)
+
+	reloaded := getChannelQuotaState(t, channelID)
+	assert.EqualValues(t, preConsumed, reloaded.UsedQuota)
+	assert.Zero(t, reloaded.QuotaLimitUsed)
+	keyUsage := getChannelKeyUsageByFingerprint(t, channelID, task.PrivateData.ChannelKeyFingerprint)
+	assert.EqualValues(t, preConsumed, keyUsage.QuotaLimitUsed)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channelID, "", usageDate)
+	assert.EqualValues(t, preConsumed, summary.Quota)
+	assert.EqualValues(t, totalTokens, summary.TokenUsed)
+	detail := getChannelUsageDailyRow(t, channelID, task.PrivateData.ChannelKeyFingerprint, usageDate)
+	assert.EqualValues(t, preConsumed, detail.Quota)
+	assert.EqualValues(t, totalTokens, detail.TokenUsed)
 }
 
 func TestSettle_NonPerCall_AdaptorAdjustWorks(t *testing.T) {

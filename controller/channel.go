@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
@@ -49,6 +51,8 @@ type OpenAIModelsResponse struct {
 	Data    []OpenAIModel `json:"data"`
 	Success bool          `json:"success"`
 }
+
+var refreshCodexChannelCredential = service.RefreshCodexChannelCredential
 
 func parseStatusFilter(statusParam string) int {
 	switch strings.ToLower(statusParam) {
@@ -435,17 +439,17 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
-		return fmt.Errorf("channel cannot be empty")
+		return common.NewLocalizedError(i18n.MsgInvalidParams)
 	}
 	if channel.QuotaLimit < 0 {
-		return fmt.Errorf("渠道限额不能小于 0")
+		return common.NewLocalizedError(i18n.MsgChannelQuotaLimitNegative)
 	}
 	if channel.QuotaLimitMode != "" && model.NormalizeQuotaLimitMode(channel.QuotaLimitMode) != channel.QuotaLimitMode {
-		return fmt.Errorf("无效的渠道限额模式")
+		return common.NewLocalizedError(i18n.MsgChannelQuotaModeInvalid)
 	}
 	if isAdd && !channel.ChannelInfo.IsMultiKey &&
 		(channel.QuotaLimitMode == model.ChannelQuotaLimitModeKey || channel.QuotaLimitMode == model.ChannelQuotaLimitModeBoth) {
-		return fmt.Errorf("单密钥渠道不支持密钥限额模式")
+		return common.NewLocalizedError(i18n.MsgChannelQuotaSingleKeyUnsupported)
 	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
@@ -487,17 +491,17 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		trimmedKey := strings.TrimSpace(channel.Key)
 		if isAdd || trimmedKey != "" {
 			if !strings.HasPrefix(trimmedKey, "{") {
-				return fmt.Errorf("Codex key must be a valid JSON object")
+				return common.NewLocalizedError(i18n.MsgChannelCodexKeyInvalidJSON)
 			}
 			var keyMap map[string]any
 			if err := common.Unmarshal([]byte(trimmedKey), &keyMap); err != nil {
-				return fmt.Errorf("Codex key must be a valid JSON object")
+				return common.NewLocalizedError(i18n.MsgChannelCodexKeyInvalidJSON)
 			}
 			if v, ok := keyMap["access_token"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
-				return fmt.Errorf("Codex key JSON must include access_token")
+				return common.NewLocalizedError(i18n.MsgChannelCodexKeyAccessTokenRequired)
 			}
 			if v, ok := keyMap["account_id"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
-				return fmt.Errorf("Codex key JSON must include account_id")
+				return common.NewLocalizedError(i18n.MsgChannelCodexKeyAccountIDRequired)
 			}
 		}
 	}
@@ -505,35 +509,42 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	return nil
 }
 
+func channelQuotaGuardError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, model.ErrChannelQuotaResetRequired):
+		common.ApiErrorI18n(c, i18n.MsgChannelQuotaResetRequired)
+	case errors.Is(err, model.ErrChannelKeyQuotaResetRequired):
+		common.ApiErrorI18n(c, i18n.MsgChannelKeyQuotaResetRequired)
+	default:
+		common.ApiError(c, err)
+	}
+}
+
 func RefreshCodexChannelCredential(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
+		common.ApiErrorI18n(c, i18n.MsgChannelIdFormatError)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	oauthKey, ch, err := service.RefreshCodexChannelCredential(ctx, channelId, service.CodexCredentialRefreshOptions{ResetCaches: true})
+	oauthKey, ch, err := refreshCodexChannelCredential(ctx, channelId, service.CodexCredentialRefreshOptions{ResetCaches: true})
 	if err != nil {
 		common.SysError("failed to refresh codex channel credential: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "刷新凭证失败，请稍后重试"})
+		common.ApiErrorI18n(c, i18n.MsgChannelCodexRefreshFailed)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "refreshed",
-		"data": gin.H{
-			"expires_at":   oauthKey.Expired,
-			"last_refresh": oauthKey.LastRefresh,
-			"account_id":   oauthKey.AccountID,
-			"email":        oauthKey.Email,
-			"channel_id":   ch.Id,
-			"channel_type": ch.Type,
-			"channel_name": ch.Name,
-		},
+	common.ApiSuccessI18n(c, i18n.MsgChannelCodexRefreshSuccess, gin.H{
+		"expires_at":   oauthKey.Expired,
+		"last_refresh": oauthKey.LastRefresh,
+		"account_id":   oauthKey.AccountID,
+		"email":        oauthKey.Email,
+		"channel_id":   ch.Id,
+		"channel_type": ch.Type,
+		"channel_name": ch.Name,
 	})
 }
 
@@ -586,10 +597,7 @@ func AddChannel(c *gin.Context) {
 
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		common.ApiError(c, err)
 		return
 	}
 
@@ -754,7 +762,7 @@ func EnableTagChannels(c *gin.Context) {
 	}
 	err = model.EnableChannelByTag(channelTag.Tag)
 	if err != nil {
-		common.ApiError(c, err)
+		channelQuotaGuardError(c, err)
 		return
 	}
 	model.InitChannelCache()
@@ -862,10 +870,7 @@ func UpdateChannel(c *gin.Context) {
 
 	// 使用统一的校验函数
 	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		common.ApiError(c, err)
 		return
 	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
@@ -889,18 +894,12 @@ func UpdateChannel(c *gin.Context) {
 	channel.QuotaLimitResetAt = originChannel.QuotaLimitResetAt
 	if !channel.ChannelInfo.IsMultiKey &&
 		(channel.QuotaLimitMode == model.ChannelQuotaLimitModeKey || channel.QuotaLimitMode == model.ChannelQuotaLimitModeBoth) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "单密钥渠道不支持密钥限额模式",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelQuotaSingleKeyUnsupported)
 		return
 	}
 	if channel.Status == common.ChannelStatusEnabled && originChannel.Status != common.ChannelStatusEnabled {
 		if err := originChannel.CanEnableChannel(); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			channelQuotaGuardError(c, err)
 			return
 		}
 	}
@@ -1286,18 +1285,12 @@ func ManageMultiKeys(c *gin.Context) {
 
 	channel, err := model.GetChannelById(request.ChannelId, true)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "渠道不存在",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelKeysChannelNotFound)
 		return
 	}
 
 	if !channel.ChannelInfo.IsMultiKey {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "该渠道不是多密钥模式",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelKeysNotMultiKey)
 		return
 	}
 
@@ -1422,19 +1415,13 @@ func ManageMultiKeys(c *gin.Context) {
 
 	case "disable_key":
 		if request.KeyIndex == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "未指定要禁用的密钥索引",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysDisableIndexRequired)
 			return
 		}
 
 		keyIndex := *request.KeyIndex
 		if keyIndex < 0 || keyIndex >= channel.ChannelInfo.MultiKeySize {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "密钥索引超出范围",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysIndexOutOfRange)
 			return
 		}
 
@@ -1445,44 +1432,29 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "密钥已禁用",
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysDisabled, nil)
 		return
 
 	case "enable_key":
 		if request.KeyIndex == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "未指定要启用的密钥索引",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysEnableIndexRequired)
 			return
 		}
 
 		keyIndex := *request.KeyIndex
 		if keyIndex < 0 || keyIndex >= channel.ChannelInfo.MultiKeySize {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "密钥索引超出范围",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysIndexOutOfRange)
 			return
 		}
 
 		err = model.SetChannelKeyStatus(channel, keyIndex, common.ChannelStatusEnabled, "")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			channelQuotaGuardError(c, err)
 			return
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "密钥已启用",
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysEnabled, nil)
 		return
 
 	case "enable_all_keys":
@@ -1498,18 +1470,12 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 		err = model.SetChannelKeyStatuses(channel, keyIndexes, common.ChannelStatusEnabled, "")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			channelQuotaGuardError(c, err)
 			return
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": fmt.Sprintf("已启用 %d 个密钥", enabledCount),
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysEnabledCount, nil, map[string]any{"Count": enabledCount})
 		return
 
 	case "disable_all_keys":
@@ -1525,10 +1491,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		if len(keyIndexes) == 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "没有可禁用的密钥",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysNoEnabledKeys)
 			return
 		}
 
@@ -1539,27 +1502,18 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": fmt.Sprintf("已禁用 %d 个密钥", len(keyIndexes)),
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysDisabledCount, nil, map[string]any{"Count": len(keyIndexes)})
 		return
 
 	case "delete_key":
 		if request.KeyIndex == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "未指定要删除的密钥索引",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysDeleteIndexRequired)
 			return
 		}
 
 		keyIndex := *request.KeyIndex
 		if keyIndex < 0 || keyIndex >= channel.ChannelInfo.MultiKeySize {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "密钥索引超出范围",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysIndexOutOfRange)
 			return
 		}
 
@@ -1598,10 +1552,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		if len(remainingKeys) == 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "不能删除最后一个密钥",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysLastKeyDeleteForbidden)
 			return
 		}
 
@@ -1619,10 +1570,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "密钥已删除",
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysDeleted, nil)
 		return
 
 	case "delete_disabled_keys":
@@ -1666,10 +1614,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		if deletedCount == 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "没有需要删除的自动禁用密钥",
-			})
+			common.ApiErrorI18n(c, i18n.MsgChannelKeysNoAutoDisabledKeys)
 			return
 		}
 
@@ -1687,18 +1632,11 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": fmt.Sprintf("已删除 %d 个自动禁用的密钥", deletedCount),
-			"data":    deletedCount,
-		})
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysDeletedAutoCount, deletedCount, map[string]any{"Count": deletedCount})
 		return
 
 	default:
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "不支持的操作",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelKeysUnsupportedAction)
 		return
 	}
 }

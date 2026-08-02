@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -61,7 +62,7 @@ type AdminMonitorGroupResponse struct {
 func GetMonitorGroups(c *gin.Context) {
 	status, err := parseMonitorGroupStatus(c.Query("status"))
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	pageInfo := common.GetPageQuery(c)
@@ -100,7 +101,7 @@ func GetMonitorGroupChannelOptions(c *gin.Context) {
 func GetMonitorGroup(c *gin.Context) {
 	id, err := parseMonitorGroupId(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	group, err := model.GetMonitorGroupById(id)
@@ -119,22 +120,22 @@ func GetMonitorGroup(c *gin.Context) {
 func CreateMonitorGroup(c *gin.Context) {
 	group, channelIds, err := bindMonitorGroupRequest(c, false)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	channels, err := ensureMonitorGroupChannelsExist(channelIds)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	models := getMonitorTargetModels(group, nil)
 	allowedModels, err := intersectMonitorChannelModels(channels)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := validateMonitorGroupModels(group.PrimaryModel, models[1:], allowedModels); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := model.CreateMonitorGroup(group, channelIds); err != nil {
@@ -146,28 +147,28 @@ func CreateMonitorGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, items[0])
+	common.ApiSuccessI18n(c, i18n.MsgMonitorGroupCreated, items[0])
 }
 
 func UpdateMonitorGroup(c *gin.Context) {
 	group, channelIds, err := bindMonitorGroupRequest(c, true)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	channels, err := ensureMonitorGroupChannelsExist(channelIds)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	models := getMonitorTargetModels(group, nil)
 	allowedModels, err := intersectMonitorChannelModels(channels)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := validateMonitorGroupModels(group.PrimaryModel, models[1:], allowedModels); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := model.UpdateMonitorGroup(group, channelIds); err != nil {
@@ -179,53 +180,53 @@ func UpdateMonitorGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, items[0])
+	common.ApiSuccessI18n(c, i18n.MsgMonitorGroupUpdated, items[0])
 }
 
 func DeleteMonitorGroup(c *gin.Context) {
 	id, err := parseMonitorGroupId(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := model.DeleteMonitorGroup(id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, nil)
+	common.ApiSuccessI18n(c, i18n.MsgMonitorGroupDeleted, nil)
 }
 
 func RunMonitorGroup(c *gin.Context) {
 	id, err := parseMonitorGroupId(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := RunMonitorGroupNow(id); err != nil {
 		if errors.Is(err, errMonitorGroupRunning) {
-			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "该监控分组正在检测中"})
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgMonitorGroupRunning)})
 			return
 		}
 		common.ApiError(c, err)
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"success": true, "message": "监控分组检测已开始"})
+	c.JSON(http.StatusAccepted, gin.H{"success": true, "message": common.TranslateMessage(c, i18n.MsgMonitorGroupRunStarted)})
 }
 
 func GetMonitorGroupHistory(c *gin.Context) {
 	id, err := parseMonitorGroupId(c)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	limit, err := parseMonitorGroupBoundedInt(c.Query("limit"), 60, 1, 1000)
 	if err != nil {
-		common.ApiErrorMsg(c, "invalid limit")
+		common.ApiErrorI18n(c, i18n.MsgMonitorGroupInvalidLimit)
 		return
 	}
 	days, err := parseMonitorGroupBoundedInt(c.Query("days"), 30, 1, 30)
 	if err != nil {
-		common.ApiErrorMsg(c, "invalid days")
+		common.ApiErrorI18n(c, i18n.MsgMonitorGroupInvalidDays)
 		return
 	}
 	checks, err := model.GetMonitorTimeline(id, strings.TrimSpace(c.Query("model")), limit)
@@ -244,37 +245,37 @@ func GetMonitorGroupHistory(c *gin.Context) {
 func bindMonitorGroupRequest(c *gin.Context, requireId bool) (*model.MonitorGroup, []int, error) {
 	request := &MonitorGroupRequest{}
 	if err := c.ShouldBindJSON(request); err != nil {
-		return nil, nil, err
+		return nil, nil, common.WrapLocalizedError(err, i18n.MsgInvalidParams)
 	}
 	if requireId && request.Id <= 0 {
-		return nil, nil, errors.New("监控分组 ID 无效")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupIdInvalid)
 	}
 	request.Name = strings.TrimSpace(request.Name)
 	request.Key = strings.TrimSpace(request.Key)
 	request.Description = strings.TrimSpace(request.Description)
 	request.PrimaryModel = strings.TrimSpace(request.PrimaryModel)
 	if request.Name == "" || len(request.Name) > 100 {
-		return nil, nil, errors.New("监控分组名称长度必须为 1-100")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupNameInvalid)
 	}
 	if !monitorGroupKeyPattern.MatchString(request.Key) || len(request.Key) > 64 {
-		return nil, nil, errors.New("监控分组标识只允许小写字母、数字、下划线和连字符")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupKeyInvalid)
 	}
 	if len(request.Description) > 255 || request.PrimaryModel == "" || len(request.PrimaryModel) > 128 {
-		return nil, nil, errors.New("监控模型或描述无效")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupModelDescriptionInvalid)
 	}
 	if request.IntervalSeconds < 15 || request.IntervalSeconds > 3600 {
-		return nil, nil, errors.New("检测间隔必须在 15-3600 秒之间")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupIntervalInvalid)
 	}
 	if request.TimeoutSeconds < 5 || request.TimeoutSeconds > 120 {
-		return nil, nil, errors.New("超时时间必须在 5-120 秒之间")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupTimeoutInvalid)
 	}
 	if request.DegradedMs <= 0 || request.DegradedMs > 300000 {
-		return nil, nil, errors.New("降级延迟阈值必须在 1-300000 毫秒之间")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupDegradedInvalid)
 	}
 
 	channelIds := uniqueMonitorGroupChannelIds(request.ChannelIds)
 	if len(channelIds) == 0 {
-		return nil, nil, errors.New("至少选择一个渠道")
+		return nil, nil, common.NewLocalizedError(i18n.MsgMonitorGroupChannelRequired)
 	}
 	extraModels := normalizeMonitorGroupModels(request.ExtraModels)
 	extraModelsJSON, err := common.Marshal(extraModels)
@@ -362,7 +363,7 @@ func ensureMonitorGroupChannelsExist(channelIds []int) ([]*model.Channel, error)
 		return nil, err
 	}
 	if len(channels) != len(channelIds) {
-		return nil, errors.New("选择的渠道不存在或已被删除")
+		return nil, common.NewLocalizedError(i18n.MsgMonitorGroupChannelsMissing)
 	}
 	channelById := make(map[int]*model.Channel, len(channels))
 	for _, channel := range channels {
@@ -381,16 +382,16 @@ func parseMonitorChannelModels(value string) []string {
 
 func intersectMonitorChannelModels(channels []*model.Channel) ([]string, error) {
 	if len(channels) == 0 {
-		return nil, errors.New("至少选择一个渠道")
+		return nil, common.NewLocalizedError(i18n.MsgMonitorGroupChannelRequired)
 	}
 	intersection := parseMonitorChannelModels(channels[0].Models)
 	if len(intersection) == 0 {
-		return nil, errors.New("所选渠道没有可用于探测的模型")
+		return nil, common.NewLocalizedError(i18n.MsgMonitorGroupNoProbeModels)
 	}
 	for _, channel := range channels[1:] {
 		models := parseMonitorChannelModels(channel.Models)
 		if len(models) == 0 {
-			return nil, errors.New("所选渠道没有可用于探测的模型")
+			return nil, common.NewLocalizedError(i18n.MsgMonitorGroupNoProbeModels)
 		}
 		available := make(map[string]struct{}, len(models))
 		for _, modelName := range models {
@@ -405,7 +406,7 @@ func intersectMonitorChannelModels(channels []*model.Channel) ([]string, error) 
 		intersection = filtered
 	}
 	if len(intersection) == 0 {
-		return nil, errors.New("所选渠道没有共同支持的模型")
+		return nil, common.NewLocalizedError(i18n.MsgMonitorGroupNoCommonModels)
 	}
 	return intersection, nil
 }
@@ -418,7 +419,7 @@ func validateMonitorGroupModels(primary string, extra, allowed []string) error {
 	configured := append([]string{strings.TrimSpace(primary)}, extra...)
 	for _, modelName := range configured {
 		if _, ok := allowedSet[strings.TrimSpace(modelName)]; !ok {
-			return errors.New("主探测模型和额外探测模型必须由所选渠道共同支持")
+			return common.NewLocalizedError(i18n.MsgMonitorGroupModelsNotSupported)
 		}
 	}
 	return nil
@@ -477,7 +478,7 @@ func normalizeMonitorGroupModels(models []string) []string {
 func parseMonitorGroupId(c *gin.Context) (int, error) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		return 0, errors.New("监控分组 ID 无效")
+		return 0, common.NewLocalizedError(i18n.MsgMonitorGroupIdInvalid)
 	}
 	return id, nil
 }
@@ -488,7 +489,7 @@ func parseMonitorGroupStatus(value string) (int, error) {
 	}
 	status, err := strconv.Atoi(value)
 	if err != nil || (status != 0 && status != 1 && status != 2) {
-		return 0, errors.New("invalid status")
+		return 0, common.NewLocalizedError(i18n.MsgMonitorGroupInvalidStatus)
 	}
 	return status, nil
 }

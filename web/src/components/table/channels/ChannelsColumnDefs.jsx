@@ -507,6 +507,12 @@ export const getChannelsColumns = ({
           }
           let otherInfo = JSON.parse(record.other_info);
           let reason = otherInfo['status_reason'];
+          const statusReasonTranslations = {
+            'All keys are disabled': t('所有密钥均已禁用'),
+            'channel quota limit reached': t('渠道限额已耗尽'),
+            'key quota limit reached': t('密钥限额已耗尽'),
+          };
+          reason = statusReasonTranslations[reason] || reason;
           let time = otherInfo['status_time'];
           return (
             <div>
@@ -564,6 +570,7 @@ export const getChannelsColumns = ({
           loading={usageStatsLoading}
           error={usageStatsError}
           onRefresh={updateChannelBalance}
+          t={t}
         />
       ),
     },

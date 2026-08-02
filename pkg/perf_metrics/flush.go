@@ -22,13 +22,13 @@ func flushLoop() {
 		if flushSucceeded {
 			common.MarkJobHeartbeat("perf_metrics_flush", "ok", "")
 			if wasFailing {
-				recordPerfSystemEvent("info", "模型性能指标刷盘已恢复")
+				recordPerfSystemEvent("info", perfFlushRecoveredMessageKey, "模型性能指标刷盘已恢复")
 				wasFailing = false
 			}
 		} else {
 			common.MarkJobHeartbeat("perf_metrics_flush", "error", "metrics flush failed; counters restored")
 			if !wasFailing {
-				recordPerfSystemEvent("error", "模型性能指标刷盘失败，内存计数已保留并将自动重试")
+				recordPerfSystemEvent("error", perfFlushFailedMessageKey, "模型性能指标刷盘失败，内存计数已保留并将自动重试")
 				wasFailing = true
 			}
 		}

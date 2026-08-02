@@ -32,7 +32,7 @@ export const quotaToDisplayAmount = (quota) => {
   if (type === 'TOKENS') return q;
   const usd = abs / getQuotaPerUnit();
   if (type === 'USD') return sign * usd;
-  return sign * usd * (rate || 1);
+  return sign * usd * rate;
 };
 
 export const displayAmountToQuota = (amount) => {
@@ -42,6 +42,6 @@ export const displayAmountToQuota = (amount) => {
   const abs = Math.abs(val);
   const { type, rate } = getCurrencyConfig();
   if (type === 'TOKENS') return Math.round(val);
-  const usd = type === 'USD' ? abs : abs / (rate || 1);
+  const usd = type === 'USD' ? abs : abs / rate;
   return sign * Math.round(usd * getQuotaPerUnit());
 };

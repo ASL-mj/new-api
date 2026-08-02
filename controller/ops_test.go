@@ -237,6 +237,19 @@ func TestOpsQueryRejectsInvalidRange(t *testing.T) {
 	assert.False(t, response["success"].(bool))
 }
 
+func TestOpsQueryErrorsAreLocalized(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	english := performMonitorGroupRequestWithLanguage(
+		t, http.MethodGet, "/api/ops/overview?start_timestamp=200&end_timestamp=100", "", "en", GetOpsOverview,
+	)
+	assert.Contains(t, english.Body.String(), "The end timestamp cannot be earlier than the start timestamp")
+
+	traditional := performMonitorGroupRequestWithLanguage(
+		t, http.MethodGet, "/api/ops/details?metric=invalid", "", "zh-TW", GetOpsDetails,
+	)
+	assert.Contains(t, traditional.Body.String(), "維運指標無效")
+}
+
 func TestGetOpsDetailsPaginatesNewestFirstAndIncludesChannelName(t *testing.T) {
 	prepareMonitorRunnerTables(t)
 	channel := &model.Channel{Name: "Detail Channel", Key: "secret", Type: 1}

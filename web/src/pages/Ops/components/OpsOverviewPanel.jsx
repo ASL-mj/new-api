@@ -47,13 +47,13 @@ const buildIdleWavePath = (phase, amplitude, baseline) =>
     return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
   }).join(' ');
 
-const IdleWave = ({ phase }) => (
+const IdleWave = ({ phase, t }) => (
   <svg
     className='h-full w-full'
     viewBox='0 0 240 64'
     preserveAspectRatio='none'
     role='img'
-    aria-label='暂无请求时的实时波形'
+    aria-label={t('暂无请求时的实时波形')}
   >
     <path
       d={buildIdleWavePath(phase, 4, 33)}
@@ -327,7 +327,7 @@ const OpsOverviewPanel = ({
                       borderColor: 'var(--semi-color-border)',
                     }}
                   >
-                    <IdleWave phase={idlePulse} />
+                    <IdleWave phase={idlePulse} t={t} />
                   </div>
                 )}
                 {!points.length && (
