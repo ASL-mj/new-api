@@ -21,6 +21,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   API,
+  renderQuota,
   showError,
   showInfo,
   showSuccess,
@@ -3911,7 +3912,7 @@ const EditChannelModal = (props) => {
                           <div className='flex flex-col'>
                             <Text>
                               {t('当前限额已用')}:{' '}
-                              {inputs.quota_limit_used || 0}
+                              {renderQuota(inputs.quota_limit_used || 0)}
                             </Text>
                             <Text type='tertiary' size='small'>
                               {t('重置只清零用量，不会自动启用渠道')}

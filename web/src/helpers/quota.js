@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getCurrencyConfig } from './render';
+import { getCurrencyConfig } from './currency';
 
 export const getQuotaPerUnit = () => {
   const raw = parseFloat(localStorage.getItem('quota_per_unit') || '1');

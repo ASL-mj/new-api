@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import i18next from 'i18next';
 import { Modal, Tag, Typography, Avatar } from '@douyinfe/semi-ui';
+import { getCurrencyConfig } from './currency';
 import { copy, showSuccess } from './utils';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
 import {
@@ -1108,33 +1109,7 @@ export function renderQuotaWithAmount(amount) {
  * 获取当前货币配置信息
  * @returns {Object} - { symbol, rate, type }
  */
-export function getCurrencyConfig() {
-  const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
-  const statusStr = localStorage.getItem('status');
-
-  let symbol = '$';
-  let rate = 1;
-
-  if (quotaDisplayType === 'CNY') {
-    symbol = '¥';
-    try {
-      if (statusStr) {
-        const s = JSON.parse(statusStr);
-        rate = s?.usd_exchange_rate || 7;
-      }
-    } catch (e) {}
-  } else if (quotaDisplayType === 'CUSTOM') {
-    try {
-      if (statusStr) {
-        const s = JSON.parse(statusStr);
-        symbol = s?.custom_currency_symbol || '¤';
-        rate = s?.custom_currency_exchange_rate || 1;
-      }
-    } catch (e) {}
-  }
-
-  return { symbol, rate, type: quotaDisplayType };
-}
+export { getCurrencyConfig } from './currency';
 
 /**
  * 将美元金额转换为当前选择的货币

@@ -95,6 +95,62 @@ func TestRecordChannelUsageSingleKeyUpdatesChannelKeyAndDaily(t *testing.T) {
 	assert.EqualValues(t, 1, detail.RequestCount)
 }
 
+func TestRecordChannelUsageKeepsMultiKeyQuotaAndTokensSeparate(t *testing.T) {
+	truncate(t)
+
+	channel := &model.Channel{
+		Id:             109,
+		Name:           "multi-key-quota-unit",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:   true,
+			MultiKeySize: 2,
+		},
+	}
+	seedChannelUsageTestChannel(t, channel)
+
+	usages, err := model.EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	require.Len(t, usages, 2)
+	require.NoError(t, model.DB.Model(&model.ChannelKeyUsage{}).
+		Where("id = ?", usages[1].Id).
+		Update("quota_limit", 100).Error)
+
+	when := time.Date(2026, 8, 1, 13, 0, 0, 0, time.UTC)
+	require.NoError(t, RecordChannelUsage(ChannelUsageRecordParams{
+		ChannelID:      channel.Id,
+		SelectedKey:    "sk-beta",
+		KeyIndex:       1,
+		HasKeyIdentity: true,
+		Quota:          10,
+		TokenUsed:      100000,
+		RequestCount:   1,
+		Now:            when,
+		ModelName:      "gpt-4o-mini",
+		Group:          "default",
+		RequestID:      "req-multi-key-quota-unit",
+	}))
+
+	var keyUsage model.ChannelKeyUsage
+	require.NoError(t, model.DB.Where("id = ?", usages[1].Id).First(&keyUsage).Error)
+	assert.EqualValues(t, 10, keyUsage.QuotaLimitUsed)
+	assert.EqualValues(t, 100, keyUsage.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, keyUsage.Status)
+
+	usageDate := channelUsageDateForServiceTest(when)
+	summary := getChannelUsageDailyRow(t, channel.Id, "", usageDate)
+	assert.EqualValues(t, 10, summary.Quota)
+	assert.EqualValues(t, 100000, summary.TokenUsed)
+
+	detail := getChannelUsageDailyRow(t, channel.Id, keyUsage.KeyFingerprint, usageDate)
+	assert.EqualValues(t, 10, detail.Quota)
+	assert.EqualValues(t, 100000, detail.TokenUsed)
+}
+
 func TestRecordChannelUsageMultiKeyFirstExhaustionEmitsSingleKeyEvent(t *testing.T) {
 	truncate(t)
 

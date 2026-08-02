@@ -44,13 +44,90 @@ import {
 } from '@douyinfe/semi-illustrations';
 import {
   API,
+  getCurrencyConfig,
+  renderQuota,
   showError,
   showSuccess,
   showWarning,
   timestamp2string,
 } from '../../../../helpers';
+import {
+  displayAmountToQuota,
+  quotaToDisplayAmount,
+} from '../../../../helpers/channelQuota';
 
 const { Text } = Typography;
+
+const normalizeQuotaValue = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+};
+
+const KeyQuotaEditor = ({ initialQuota, onQuotaChange, t }) => {
+  const normalizedInitialQuota = Math.round(normalizeQuotaValue(initialQuota));
+  const [quota, setQuota] = useState(normalizedInitialQuota);
+  const [amount, setAmount] = useState(
+    Number(quotaToDisplayAmount(normalizedInitialQuota).toFixed(6)),
+  );
+  const [showQuotaInput, setShowQuotaInput] = useState(false);
+  const currencyConfig = getCurrencyConfig();
+  const isTokensDisplay = currencyConfig.type === 'TOKENS';
+
+  const handleAmountChange = (value) => {
+    const nextAmount = normalizeQuotaValue(value);
+    const nextQuota = displayAmountToQuota(nextAmount);
+    setAmount(nextAmount);
+    setQuota(nextQuota);
+    onQuotaChange(nextQuota);
+  };
+
+  const handleQuotaChange = (value) => {
+    const nextQuota = Math.round(normalizeQuotaValue(value));
+    setQuota(nextQuota);
+    setAmount(Number(quotaToDisplayAmount(nextQuota).toFixed(6)));
+    onQuotaChange(nextQuota);
+  };
+
+  return (
+    <div className='flex flex-col gap-2'>
+      <Text type='tertiary'>
+        {t('填写 0 表示无限额，修改限额不会改变当前启用状态。')}
+      </Text>
+      <Text size='small'>{t('金额')}</Text>
+      <InputNumber
+        value={amount}
+        prefix={isTokensDisplay ? undefined : currencyConfig.symbol}
+        min={0}
+        precision={isTokensDisplay ? 0 : 6}
+        step={isTokensDisplay ? 1 : 0.000001}
+        style={{ width: '100%' }}
+        onChange={handleAmountChange}
+      />
+      <div
+        className='text-xs cursor-pointer mt-1'
+        style={{ color: 'var(--semi-color-text-2)' }}
+        onClick={() => setShowQuotaInput((visible) => !visible)}
+      >
+        {showQuotaInput
+          ? `▾ ${t('收起原生额度输入')}`
+          : `▸ ${t('使用原生额度输入')}`}
+      </div>
+      {showQuotaInput && (
+        <div className='flex flex-col gap-1'>
+          <Text size='small'>{t('原生额度')}</Text>
+          <InputNumber
+            value={quota}
+            min={0}
+            precision={0}
+            step={500000}
+            style={{ width: '100%' }}
+            onChange={handleQuotaChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
 
 const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
   const { t } = useTranslation();
@@ -164,24 +241,17 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
   };
 
   const handleEditKeyQuota = (record) => {
-    let nextLimit = Number(record.quota_limit || 0);
+    let nextLimit = Math.round(normalizeQuotaValue(record.quota_limit));
     Modal.confirm({
       title: t('修改密钥限额'),
       content: (
-        <div className='flex flex-col gap-2'>
-          <Text type='tertiary'>
-            {t('填写 0 表示无限额，修改限额不会改变当前启用状态。')}
-          </Text>
-          <InputNumber
-            defaultValue={nextLimit}
-            min={0}
-            precision={0}
-            style={{ width: '100%' }}
-            onChange={(value) => {
-              nextLimit = Number(value || 0);
-            }}
-          />
-        </div>
+        <KeyQuotaEditor
+          initialQuota={nextLimit}
+          onQuotaChange={(quota) => {
+            nextLimit = quota;
+          }}
+          t={t}
+        />
       ),
       onOk: async () => {
         const res = await API.put(
@@ -503,7 +573,7 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
         return (
           <div className='min-w-32'>
             <Text size='small'>
-              {used} / {limit > 0 ? limit : '∞'}
+              {renderQuota(used)} / {limit > 0 ? renderQuota(limit) : '∞'}
             </Text>
             {limit > 0 && (
               <Progress percent={percent} showInfo={false} size='small' />
