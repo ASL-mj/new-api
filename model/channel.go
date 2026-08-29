@@ -635,14 +635,14 @@ func UpdateChannelSortOrder(channelID int, sortOrder int64) error {
 	if sortOrder < 0 {
 		return errors.New("排序值不能为负数")
 	}
+	// MySQL reports RowsAffected=0 when the requested value is unchanged;
+	// check existence separately so that a no-op update is still successful.
+	var existing Channel
+	if err := DB.Select("id").First(&existing, "id = ?", channelID).Error; err != nil {
+		return err
+	}
 	result := DB.Model(&Channel{}).Where("id = ?", channelID).Update("sort_order", sortOrder)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return result.Error
 }
 
 // backfillChannelSortOrder 为尚未手动排序的渠道生成展示排序值。
