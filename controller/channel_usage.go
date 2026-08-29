@@ -16,8 +16,9 @@ import (
 
 const maxChannelUsageBatchIDs = 200
 
-type updateChannelKeyQuotaLimitRequest struct {
-	QuotaLimit int64 `json:"quota_limit"`
+type updateChannelKeyUsageRequest struct {
+	QuotaLimit *int64  `json:"quota_limit"`
+	KeyName    *string `json:"key_name"`
 }
 
 func GetChannelUsageBatch(c *gin.Context) {
@@ -76,21 +77,26 @@ func ResetChannelKeyQuotaUsage(c *gin.Context) {
 	common.ApiSuccessI18n(c, i18n.MsgChannelUsageKeyQuotaReset, nil)
 }
 
-func UpdateChannelKeyQuotaLimit(c *gin.Context) {
+// UpdateChannelKeyUsageConfig 统一编辑密钥别名与限额配置；两个标签页字段均可只更新其一。
+func UpdateChannelKeyUsageConfig(c *gin.Context) {
 	channelID, fingerprint, ok := getChannelKeyUsageIdentity(c)
 	if !ok {
 		return
 	}
-	request := updateChannelKeyQuotaLimitRequest{}
+	request := updateChannelKeyUsageRequest{}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageInvalidRequest))
 		return
 	}
-	if request.QuotaLimit < 0 {
+	if request.QuotaLimit == nil && request.KeyName == nil {
+		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageInvalidRequest))
+		return
+	}
+	if request.QuotaLimit != nil && *request.QuotaLimit < 0 {
 		channelUsageError(c, common.NewLocalizedError(i18n.MsgChannelUsageKeyQuotaNegative))
 		return
 	}
-	if err := model.UpdateChannelKeyQuotaLimit(channelID, fingerprint, request.QuotaLimit); err != nil {
+	if err := model.UpdateChannelKeyUsageConfig(channelID, fingerprint, request.QuotaLimit, request.KeyName); err != nil {
 		channelUsageError(c, err)
 		return
 	}

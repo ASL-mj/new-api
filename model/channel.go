@@ -58,13 +58,15 @@ type Channel struct {
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	// SortOrder 仅控制渠道管理列表的展示顺序，不参与请求调度（调度使用 priority/weight）。
+	SortOrder      int64   `json:"sort_order" gorm:"bigint;default:0;index"`
+	AutoBan        *int    `json:"auto_ban" gorm:"default:1"`
+	OtherInfo      string  `json:"other_info"`
+	Tag            *string `json:"tag" gorm:"index"`
+	Setting        *string `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride  *string `json:"param_override" gorm:"type:text"`
+	HeaderOverride *string `json:"header_override" gorm:"type:text"`
+	Remark         *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 
@@ -215,23 +217,36 @@ func (channel *Channel) GetKeys() []string {
 		return []string{}
 	}
 	if len(channel.Keys) > 0 {
-		return channel.Keys
+		return normalizeChannelKeyList(channel.Keys)
 	}
 	trimmed := strings.TrimSpace(channel.Key)
 	// If the key starts with '[', try to parse it as a JSON array (e.g., for Vertex AI scenarios)
 	if strings.HasPrefix(trimmed, "[") {
 		var arr []json.RawMessage
 		if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-			res := make([]string, len(arr))
-			for i, v := range arr {
-				res[i] = string(v)
+			res := make([]string, 0, len(arr))
+			for _, v := range arr {
+				res = append(res, string(v))
 			}
-			return res
+			return normalizeChannelKeyList(res)
 		}
 	}
-	// Otherwise, fall back to splitting by newline
-	keys := strings.Split(strings.Trim(channel.Key, "\n"), "\n")
-	return keys
+	// Otherwise, fall back to splitting by newline. API keys copied from Windows
+	// or a textarea may contain CRLF, extra spaces, or blank lines; those are
+	// formatting artifacts and must not create a different key identity.
+	rawKey := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(channel.Key)
+	return normalizeChannelKeyList(strings.Split(rawKey, "\n"))
+}
+
+func normalizeChannelKeyList(keys []string) []string {
+	normalized := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			normalized = append(normalized, key)
+		}
+	}
+	return normalized
 }
 
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
@@ -405,7 +420,9 @@ func (channel *Channel) SaveWithoutKey() error {
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Channel, error) {
 	var channels []*Channel
 	var err error
-	order := "priority desc"
+	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
+	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
+	order := "sort_order asc, id asc"
 	if idSort {
 		order = "id desc"
 	}
@@ -419,7 +436,9 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Chan
 
 func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, error) {
 	var channels []*Channel
-	order := "priority desc"
+	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
+	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
+	order := "sort_order asc, id asc"
 	if idSort {
 		order = "id desc"
 	}
@@ -446,7 +465,9 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 		baseURLCol = `"base_url"`
 	}
 
-	order := "priority desc"
+	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
+	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
+	order := "sort_order asc, id asc"
 	if idSort {
 		order = "id desc"
 	}
@@ -597,8 +618,54 @@ func (channel *Channel) Insert() error {
 	if err != nil {
 		return err
 	}
+	// 新渠道默认排在已排序渠道之后，避免 sort_order=0 时插到列表最前。
+	if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("sort_order", channel.Id).Error; err != nil {
+		return err
+	}
 	err = channel.AddAbilities(nil)
 	return err
+}
+
+// UpdateChannelSortOrder 更新单个渠道的展示排序值（渠道编辑弹窗中的排序字段）。
+// 仅影响列表展示顺序，不参与请求调度。
+func UpdateChannelSortOrder(channelID int, sortOrder int64) error {
+	if channelID <= 0 {
+		return errors.New("invalid channel id")
+	}
+	if sortOrder < 0 {
+		return errors.New("排序值不能为负数")
+	}
+	result := DB.Model(&Channel{}).Where("id = ?", channelID).Update("sort_order", sortOrder)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// backfillChannelSortOrder 为尚未手动排序的渠道生成展示排序值。
+// 初始顺序沿用原有默认视图（priority desc, id desc），保证升级后列表顺序不变；
+// 已手动排序（sort_order > 0）的渠道不受影响。
+func backfillChannelSortOrder() {
+	var maxSort int64
+	if err := DB.Model(&Channel{}).Select("COALESCE(MAX(sort_order), 0) AS sort_order").Scan(&maxSort).Error; err != nil {
+		common.SysError("failed to read max channel sort_order: " + err.Error())
+		return
+	}
+	var pending []Channel
+	if err := DB.Select("id").Where("sort_order = 0").Order("priority desc, id desc").Find(&pending).Error; err != nil {
+		common.SysError("failed to load channels for sort_order backfill: " + err.Error())
+		return
+	}
+	for i, ch := range pending {
+		next := maxSort + int64(i) + 1
+		if err := DB.Model(&Channel{}).Where("id = ?", ch.Id).Update("sort_order", next).Error; err != nil {
+			common.SysError("failed to backfill channel sort_order: " + err.Error())
+			return
+		}
+	}
 }
 
 func (channel *Channel) Update() error {
@@ -1013,7 +1080,9 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 		baseURLCol = `"base_url"`
 	}
 
-	order := "priority desc"
+	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
+	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
+	order := "sort_order asc, id asc"
 	if idSort {
 		order = "id desc"
 	}
@@ -1188,7 +1257,9 @@ func CountAllTags() (int64, error) {
 // Get channels of specified type with pagination
 func GetChannelsByType(startIdx int, num int, idSort bool, channelType int) ([]*Channel, error) {
 	var channels []*Channel
-	order := "priority desc"
+	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
+	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
+	order := "sort_order asc, id asc"
 	if idSort {
 		order = "id desc"
 	}

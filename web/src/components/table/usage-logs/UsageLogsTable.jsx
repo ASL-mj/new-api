@@ -18,18 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useMemo } from 'react';
-import { Empty, Descriptions } from '@douyinfe/semi-ui';
+import { Empty } from '@douyinfe/semi-ui';
 import CardTable from '../../common/ui/CardTable';
 import {
   IllustrationNoResult,
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
 import { getLogsColumns } from './UsageLogsColumnDefs';
+import './UsageLogsTable.css';
 
 const LogsTable = (logsData) => {
   const {
     logs,
-    expandData,
     loading,
     activePage,
     pageSize,
@@ -41,7 +41,7 @@ const LogsTable = (logsData) => {
     copyText,
     showUserInfoFunc,
     openChannelAffinityUsageCacheModal,
-    hasExpandableRows,
+    openLogDetail,
     isAdminUser,
     billingDisplayMode,
     t,
@@ -56,6 +56,7 @@ const LogsTable = (logsData) => {
       copyText,
       showUserInfoFunc,
       openChannelAffinityUsageCacheModal,
+      openLogDetail,
       isAdminUser,
       billingDisplayMode,
     });
@@ -65,6 +66,7 @@ const LogsTable = (logsData) => {
     copyText,
     showUserInfoFunc,
     openChannelAffinityUsageCacheModal,
+    openLogDetail,
     isAdminUser,
     billingDisplayMode,
   ]);
@@ -84,24 +86,16 @@ const LogsTable = (logsData) => {
       : visibleColumnsList;
   }, [compactMode, visibleColumnsList]);
 
-  const expandRowRender = (record, index) => {
-    return <Descriptions data={expandData[record.key]} />;
-  };
-
   return (
     <CardTable
       columns={tableColumns}
-      {...(hasExpandableRows() && {
-        expandedRowRender: expandRowRender,
-        expandRowByClick: true,
-        rowExpandable: (record) =>
-          expandData[record.key] && expandData[record.key].length > 0,
-      })}
       dataSource={logs}
       rowKey='key'
       loading={loading}
       scroll={compactMode ? undefined : { x: 'max-content' }}
-      className='rounded-xl overflow-hidden'
+      className={`usage-logs-table rounded-xl overflow-hidden ${
+        compactMode ? 'usage-logs-table-compact' : ''
+      }`}
       size='small'
       empty={
         <Empty

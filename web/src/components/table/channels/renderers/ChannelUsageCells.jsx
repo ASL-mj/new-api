@@ -1,3 +1,22 @@
+/*
+Copyright (C) 2025 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+
 import React from 'react';
 import { Tooltip, Typography } from '@douyinfe/semi-ui';
 import { renderQuota, renderQuotaWithAmount } from '../../../../helpers';
@@ -19,6 +38,18 @@ const aggregateStats = (record, stats) => {
     (total, child) => {
       const current = stats[child.id] || {};
       Object.keys(total).forEach((key) => {
+        if (key === 'key_quota_unlimited') {
+          total[key] = total[key] || Number(current[key] || false);
+          return;
+        }
+        if (key === 'quota_limit_mode') {
+          if (total[key] === undefined) {
+            total[key] = current[key];
+          } else if (total[key] !== current[key]) {
+            total[key] = null;
+          }
+          return;
+        }
         total[key] += Number(current[key] || 0);
       });
       return total;
@@ -29,6 +60,10 @@ const aggregateStats = (record, stats) => {
       quota_limit_used: 0,
       quota_limit: 0,
       balance: 0,
+      quota_limit_mode: undefined,
+      key_quota_limit_used: 0,
+      key_quota_limit: 0,
+      key_quota_unlimited: false,
     },
   );
 };
@@ -51,17 +86,42 @@ export const TodayAnd30dUsageCell = ({ record, stats, loading, error }) => {
   );
 };
 
-export const UsedAndLimitCell = ({ record, stats, loading, error }) => {
+// 多密钥独立限额的汇总展示：分子分母同为密钥口径；
+// 存在未配置限额的启用密钥时，合计上限视为无限。
+const buildKeyLimitText = (value) => {
+  const used = Number(value.key_quota_limit_used || 0);
+  if (value.key_quota_unlimited) {
+    return { used, limitText: '∞' };
+  }
+  return { used, limitText: renderQuota(Number(value.key_quota_limit || 0)) };
+};
+
+export const UsedAndLimitCell = ({ record, stats, loading, error, t }) => {
   const value = aggregateStats(record, stats) || {};
+  const mode = value.quota_limit_mode;
   const limit = Number(value.quota_limit || 0);
-  return renderState(
-    loading,
-    error,
-    lines(
-      renderQuota(value.quota_limit_used || 0),
-      limit > 0 ? renderQuota(limit) : '∞',
-    ),
-  );
+  const channelUsed = renderQuota(value.quota_limit_used || 0);
+  const channelLimitText = limit > 0 ? renderQuota(limit) : '∞';
+
+  if (mode === 'key') {
+    const { used, limitText } = buildKeyLimitText(value);
+    return renderState(loading, error, lines(renderQuota(used), limitText));
+  }
+
+  if (mode === 'both') {
+    const { used, limitText } = buildKeyLimitText(value);
+    return renderState(
+      loading,
+      error,
+      <Tooltip
+        content={`${t('密钥限额合计')}：${renderQuota(used)} / ${limitText}`}
+      >
+        <span>{lines(channelUsed, channelLimitText)}</span>
+      </Tooltip>,
+    );
+  }
+
+  return renderState(loading, error, lines(channelUsed, channelLimitText));
 };
 
 export const UpstreamBalanceCell = ({

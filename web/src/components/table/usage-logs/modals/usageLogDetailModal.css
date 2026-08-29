@@ -1,0 +1,567 @@
+/*
+ * 使用日志消耗详情弹窗（Pite 风格）局部样式。
+ * 全部选择器以 .uldm- 前缀挂载在弹窗根节点上，不影响其他页面与全局 UI。
+ * 亮色按参考图使用米白纸面与深色细边框；暗色主题通过 body[theme-mode='dark'] 覆盖。
+ */
+
+.uldm-modal .semi-modal-content,
+.uldm-dialog {
+  --uldm-paper: #fbfaf5;
+  --uldm-paper-deep: #f2f0e8;
+  --uldm-ink: #171914;
+  --uldm-ink-soft: #666960;
+  --uldm-line-strong: #171914;
+  --uldm-line: #b9bbb3;
+  --uldm-blue: #3569b3;
+  --uldm-blue-deep: #1e4c91;
+  --uldm-blue-soft: #edf3ff;
+  --uldm-green: #2e9476;
+  --uldm-orange: #ff7650;
+
+  background: var(--uldm-paper);
+  color: var(--uldm-ink);
+  border: 1px solid var(--uldm-line-strong);
+  border-radius: 0;
+  box-shadow:
+    10px 10px 0 var(--uldm-blue),
+    0 18px 48px rgba(18, 27, 43, 0.22);
+  padding: 0;
+  overflow: hidden;
+  max-width: 860px;
+  width: calc(100vw - 32px);
+}
+
+/* Semi adds the paper shell around children rendered without a title. Reset
+ * that shell so the custom document is the only visible frame. */
+.uldm-modal .semi-modal-content {
+  width: 100%;
+  max-width: none;
+  border-radius: 0 !important;
+  border: 1px solid var(--uldm-line-strong);
+  padding: 0 !important;
+  background: var(--uldm-paper);
+  box-shadow:
+    10px 10px 0 var(--uldm-blue),
+    0 18px 48px rgba(18, 27, 43, 0.22);
+}
+
+.uldm-modal .semi-modal-body-wrapper,
+.uldm-modal .semi-modal-body,
+.uldm-modal .semi-modal-footer {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.uldm-dialog {
+  width: 100%;
+  max-width: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+body[theme-mode='dark'] .uldm-modal .semi-modal-content,
+body[theme-mode='dark'] .uldm-dialog {
+  --uldm-paper: var(--semi-color-bg-1);
+  --uldm-paper-deep: var(--semi-color-bg-2);
+  --uldm-ink: var(--semi-color-text-0);
+  --uldm-ink-soft: var(--semi-color-text-2);
+  --uldm-line-strong: var(--semi-color-border-1, var(--semi-color-border));
+  --uldm-line: var(--semi-color-border);
+  --uldm-blue: var(--semi-color-primary);
+  --uldm-blue-deep: var(--semi-color-primary-hover, var(--semi-color-primary));
+  --uldm-blue-soft: var(--semi-color-primary-light-default);
+  --uldm-green: var(--semi-color-success);
+  --uldm-orange: var(--semi-color-warning);
+}
+
+.uldm-header {
+  position: relative;
+  padding: 16px 52px 13px 20px;
+  border-bottom: 1px solid var(--uldm-line-strong);
+}
+
+.uldm-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--uldm-ink-soft);
+  font:
+    10px/1.2 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.uldm-consume-tag {
+  padding: 3px 8px;
+  color: #fff;
+  background: var(--uldm-blue);
+  font:
+    700 11px/1.2 'PingFang SC',
+    sans-serif;
+  letter-spacing: 0;
+}
+
+.uldm-title {
+  margin: 8px 0 0;
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.uldm-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--uldm-ink);
+  background: transparent;
+  border: 0;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.uldm-close:hover {
+  color: var(--uldm-blue-deep);
+}
+
+.uldm-body {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  max-height: min(72vh, 720px);
+  overflow: auto;
+}
+
+/* 请求概览 */
+.uldm-overview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--uldm-line-strong);
+}
+
+.uldm-kv {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--uldm-line);
+  border-right: 1px solid var(--uldm-line);
+}
+
+.uldm-overview .uldm-kv:nth-child(2n) {
+  border-right: 0;
+}
+
+.uldm-overview .uldm-kv:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.uldm-kv-label {
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.uldm-kv-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.uldm-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.uldm-accent {
+  color: var(--uldm-blue-deep);
+}
+
+.uldm-success {
+  color: var(--uldm-green);
+}
+
+.uldm-frt {
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* 分区 */
+.uldm-section {
+  border: 1px solid var(--uldm-line-strong);
+}
+
+.uldm-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--uldm-line-strong);
+  flex-wrap: wrap;
+}
+
+.uldm-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.uldm-section-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.uldm-path {
+  color: var(--uldm-ink);
+  font:
+    700 11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+.uldm-copy-btn {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--uldm-blue-deep);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.uldm-copy-btn:hover {
+  background: var(--uldm-blue-soft);
+}
+
+.uldm-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  font-weight: 650;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.uldm-link-btn:hover {
+  color: var(--uldm-blue-deep);
+  background: var(--uldm-blue-soft);
+}
+
+/* Token 四项一行 */
+.uldm-token-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.uldm-token-cell {
+  min-height: 62px;
+  padding: 11px 12px;
+  border-right: 1px solid var(--uldm-line);
+}
+
+.uldm-token-cell:last-child {
+  border-right: 0;
+}
+
+.uldm-token-label {
+  display: block;
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.uldm-hit-rate {
+  color: var(--uldm-blue-deep);
+  font-style: normal;
+  font-weight: 850;
+}
+
+.uldm-token-value {
+  display: block;
+  margin-top: 4px;
+  font:
+    800 16px/1.1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+/* 计费详情 */
+.uldm-billing-meta {
+  display: flex;
+  gap: 15px;
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.uldm-billing-meta strong {
+  color: var(--uldm-ink);
+  margin-left: 5px;
+}
+
+.uldm-billing-item {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) 116px;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--uldm-line);
+}
+
+.uldm-billing-label {
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.uldm-formula {
+  color: var(--uldm-ink-soft);
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.uldm-amount {
+  text-align: right;
+  font:
+    750 12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+.uldm-billing-total {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.uldm-subtotal,
+.uldm-final {
+  min-height: 62px;
+  padding: 10px 12px;
+}
+
+.uldm-subtotal {
+  border-right: 1px solid var(--uldm-line-strong);
+}
+
+.uldm-total-label {
+  display: block;
+  color: var(--uldm-ink-soft);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.uldm-total-equation {
+  display: block;
+  margin-top: 5px;
+  font:
+    800 14px/1.3 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.uldm-ratio {
+  color: var(--uldm-orange);
+}
+
+.uldm-final {
+  color: #fff;
+  background: var(--uldm-blue);
+}
+
+.uldm-final .uldm-total-label {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.uldm-final .uldm-total-equation {
+  font-size: 22px;
+}
+
+/* 过程文本 / 原生格式 */
+.uldm-process {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.uldm-native {
+  border-top: 1px solid var(--uldm-line);
+  background: var(--uldm-paper-deep);
+}
+
+.uldm-violation {
+  padding: 2px 8px;
+  color: #fff;
+  background: var(--uldm-orange);
+  font-weight: 700;
+  font-size: 12px;
+  border-radius: 2px;
+}
+
+/* 扩展信息折叠 */
+.uldm-collapse-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.uldm-collapse-head:hover {
+  background: var(--uldm-paper-deep);
+}
+
+.uldm-collapse-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--uldm-ink-soft);
+  font-size: 12px;
+}
+
+.uldm-extras {
+  display: grid;
+  grid-template-columns: 1fr;
+  border-top: 1px solid var(--uldm-line);
+}
+
+.uldm-extra-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--uldm-line);
+  font-size: 12px;
+}
+
+.uldm-extra-row:last-child {
+  border-bottom: 0;
+}
+
+.uldm-extra-label {
+  color: var(--uldm-ink-soft);
+  font-weight: 650;
+  font-size: 11px;
+  padding-top: 1px;
+}
+
+.uldm-extra-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 使用日志列表"详情"列的简要摘要按钮（新版 NewAPI 风格） */
+.usage-log-detail-summary {
+  display: block;
+  max-width: 190px;
+  padding: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed var(--semi-color-border);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.usage-log-detail-summary:hover {
+  color: var(--semi-color-primary);
+  border-bottom-color: var(--semi-color-primary);
+}
+
+@media (max-width: 720px) {
+  .uldm-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .uldm-kv {
+    border-right: 0;
+  }
+
+  .uldm-overview .uldm-kv:not(:last-child) {
+    border-bottom: 1px solid var(--uldm-line);
+  }
+
+  .uldm-token-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .uldm-token-cell:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .uldm-token-cell:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--uldm-line);
+  }
+
+  .uldm-billing-item {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .uldm-billing-item .uldm-amount {
+    grid-column: 2;
+    text-align: left;
+    margin-top: -4px;
+  }
+
+  .uldm-billing-total {
+    grid-template-columns: 1fr;
+  }
+
+  .uldm-subtotal {
+    border-right: 0;
+    border-bottom: 1px solid var(--uldm-line-strong);
+  }
+
+  .uldm-final .uldm-total-equation {
+    font-size: 18px;
+  }
+
+  .uldm-extra-row {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+}

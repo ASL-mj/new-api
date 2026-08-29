@@ -107,7 +107,7 @@ func TestChannelKeyUsageAPIsDoNotExposeKeysAndKeepStatusOnResetOrLimitUpdate(t *
 	resetResponse := decodeChannelQuotaGuardResponse(t, reset.Body.String())
 	require.Equal(t, true, resetResponse["success"])
 
-	limit := performChannelUsageRequest(t, http.MethodPut, "/api/channel/503/key-usages/key/limit", `{"quota_limit":75}`, params, UpdateChannelKeyQuotaLimit)
+	limit := performChannelUsageRequest(t, http.MethodPut, "/api/channel/503/key-usages/key/config", `{"quota_limit":75}`, params, UpdateChannelKeyUsageConfig)
 	limitResponse := decodeChannelQuotaGuardResponse(t, limit.Body.String())
 	require.Equal(t, true, limitResponse["success"])
 
@@ -118,7 +118,7 @@ func TestChannelKeyUsageAPIsDoNotExposeKeysAndKeepStatusOnResetOrLimitUpdate(t *
 	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
 	assert.Equal(t, model.ChannelKeyQuotaDisabledReason, reloaded.DisabledReason)
 
-	negative := performChannelUsageRequest(t, http.MethodPut, "/api/channel/503/key-usages/key/limit", `{"quota_limit":-1}`, params, UpdateChannelKeyQuotaLimit)
+	negative := performChannelUsageRequest(t, http.MethodPut, "/api/channel/503/key-usages/key/config", `{"quota_limit":-1}`, params, UpdateChannelKeyUsageConfig)
 	negativeResponse := decodeChannelQuotaGuardResponse(t, negative.Body.String())
 	assert.Equal(t, false, negativeResponse["success"])
 	assert.Contains(t, negativeResponse["message"], "不能小于")
@@ -128,6 +128,60 @@ func TestChannelKeyUsageAPIsDoNotExposeKeysAndKeepStatusOnResetOrLimitUpdate(t *
 	unknownResponse := decodeChannelQuotaGuardResponse(t, unknown.Body.String())
 	assert.Equal(t, false, unknownResponse["success"])
 	assert.Contains(t, unknownResponse["message"], "不存在")
+}
+
+func TestChannelKeyUsageConfigUpdatesNameAndLimit(t *testing.T) {
+	db := setupChannelQuotaGuardControllerTestDB(t)
+	channel := &model.Channel{
+		Id: 505, Name: "key-config", Key: "sk-alpha\nsk-beta",
+		QuotaLimitMode: model.ChannelQuotaLimitModeKey,
+		ChannelInfo:    model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
+	}
+	require.NoError(t, db.Create(channel).Error)
+	current, err := model.EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+	first := current[0]
+	second := current[1]
+	require.NoError(t, db.Model(&model.ChannelKeyUsage{}).Where("id = ?", first.Id).Updates(map[string]interface{}{
+		"quota_limit": 50, "quota_limit_used": 20,
+	}).Error)
+
+	// 只修改名称
+	params := map[string]string{"id": "505", "fingerprint": first.KeyFingerprint}
+	rename := performChannelUsageRequest(t, http.MethodPut, "/api/channel/505/key-usages/key/config", `{"key_name":" Alpha "}`, params, UpdateChannelKeyUsageConfig)
+	renameResponse := decodeChannelQuotaGuardResponse(t, rename.Body.String())
+	require.Equal(t, true, renameResponse["success"])
+	var reloaded model.ChannelKeyUsage
+	require.NoError(t, db.First(&reloaded, first.Id).Error)
+	assert.Equal(t, "Alpha", reloaded.KeyName)
+	assert.EqualValues(t, 50, reloaded.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	// 名称重复
+	duplicate := performChannelUsageRequest(t, http.MethodPut, "/api/channel/505/key-usages/key/config", `{"key_name":"Alpha"}`, map[string]string{"id": "505", "fingerprint": second.KeyFingerprint}, UpdateChannelKeyUsageConfig)
+	duplicateResponse := decodeChannelQuotaGuardResponse(t, duplicate.Body.String())
+	assert.Equal(t, false, duplicateResponse["success"])
+	assert.Contains(t, duplicateResponse["message"], "重复")
+
+	// 名称过长
+	longName := performChannelUsageRequest(t, http.MethodPut, "/api/channel/505/key-usages/key/config", `{"key_name":"`+strings.Repeat("名", 129)+`"}`, params, UpdateChannelKeyUsageConfig)
+	longNameResponse := decodeChannelQuotaGuardResponse(t, longName.Body.String())
+	assert.Equal(t, false, longNameResponse["success"])
+	assert.Contains(t, longNameResponse["message"], "过长")
+
+	// 同时修改名称与限额；0 表示无限额且不改变启用状态
+	both := performChannelUsageRequest(t, http.MethodPut, "/api/channel/505/key-usages/key/config", `{"key_name":"Alpha-2","quota_limit":0}`, params, UpdateChannelKeyUsageConfig)
+	bothResponse := decodeChannelQuotaGuardResponse(t, both.Body.String())
+	require.Equal(t, true, bothResponse["success"])
+	require.NoError(t, db.First(&reloaded, first.Id).Error)
+	assert.Equal(t, "Alpha-2", reloaded.KeyName)
+	assert.Zero(t, reloaded.QuotaLimit)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	// 请求体为空时不做任何修改
+	empty := performChannelUsageRequest(t, http.MethodPut, "/api/channel/505/key-usages/key/config", `{}`, params, UpdateChannelKeyUsageConfig)
+	emptyResponse := decodeChannelQuotaGuardResponse(t, empty.Body.String())
+	assert.Equal(t, false, emptyResponse["success"])
 }
 
 func TestChannelQuotaConfigurationValidation(t *testing.T) {

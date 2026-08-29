@@ -193,7 +193,6 @@ const Dashboard = () => {
             spec_line={dashboardCharts.spec_line}
             spec_model_line={dashboardCharts.spec_model_line}
             spec_pie={dashboardCharts.spec_pie}
-            spec_rank_bar={dashboardCharts.spec_rank_bar}
             spec_user_rank={dashboardCharts.spec_user_rank}
             userRankMetric={dashboardCharts.userRankMetric}
             setUserRankMetric={dashboardCharts.setUserRankMetric}

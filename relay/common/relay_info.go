@@ -466,6 +466,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request: request,
 
+		// Capture the client-provided reasoning effort before request pass-through.
+		// Adaptors may be skipped when pass-through is enabled, but the parsed request
+		// is already available here and is needed for usage-log metadata.
+		ReasoningEffort: requestReasoningEffort(request),
+
 		RequestId:  reqId,
 		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
 		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
@@ -514,6 +519,20 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	return info
+}
+
+func requestReasoningEffort(request dto.Request) string {
+	switch req := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if req != nil {
+			return strings.TrimSpace(req.ReasoningEffort)
+		}
+	case *dto.OpenAIResponsesRequest:
+		if req != nil && req.Reasoning != nil {
+			return strings.TrimSpace(req.Reasoning.Effort)
+		}
+	}
+	return ""
 }
 
 func cloneRequestHeaders(c *gin.Context) map[string]string {

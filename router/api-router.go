@@ -221,7 +221,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/:id/quota/reset", controller.ResetChannelQuotaUsage)
 			channelRoute.GET("/:id/key-usages", controller.GetChannelKeyUsageList)
 			channelRoute.POST("/:id/key-usages/:fingerprint/reset", controller.ResetChannelKeyQuotaUsage)
-			channelRoute.PUT("/:id/key-usages/:fingerprint/limit", controller.UpdateChannelKeyQuotaLimit)
+			channelRoute.PUT("/:id/key-usages/:fingerprint/config", controller.UpdateChannelKeyUsageConfig)
 			channelRoute.POST("/:id/key", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), controller.GetChannelKey)
 			channelRoute.GET("/test", controller.TestAllChannels)
 			channelRoute.GET("/test/:id", controller.TestChannel)

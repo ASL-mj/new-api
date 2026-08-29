@@ -135,7 +135,8 @@ func GetAllChannels(c *gin.Context) {
 
 		baseQuery.Count(&total)
 
-		order := "priority desc"
+		// 与 model.GetAllChannels 保持一致：默认按手动展示排序，id_sort 时按 id 倒序
+		order := "sort_order asc, id asc"
 		if idSort {
 			order = "id desc"
 		}
@@ -858,6 +859,20 @@ type PatchChannel struct {
 	model.Channel
 	MultiKeyMode *string `json:"multi_key_mode"`
 	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	// SortOrder 单独承载渠道编辑弹窗提交的展示排序值；
+	// 外层同名字段使 JSON 只填充指针，避免 GORM Updates 因零值丢掉合法的 0。
+	SortOrder *int64 `json:"sort_order,omitempty"`
+}
+
+// applyChannelSortOrder 在渠道更新成功后持久化展示排序值（仅当请求显式携带时）。
+func applyChannelSortOrder(patch *PatchChannel) error {
+	if patch.SortOrder == nil {
+		return nil
+	}
+	if *patch.SortOrder < 0 {
+		return errors.New("排序值不能为负数")
+	}
+	return model.UpdateChannelSortOrder(patch.Id, *patch.SortOrder)
 }
 
 func UpdateChannel(c *gin.Context) {
@@ -991,6 +1006,10 @@ func UpdateChannel(c *gin.Context) {
 	}
 	err = channel.Update()
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := applyChannelSortOrder(&channel); err != nil {
 		common.ApiError(c, err)
 		return
 	}

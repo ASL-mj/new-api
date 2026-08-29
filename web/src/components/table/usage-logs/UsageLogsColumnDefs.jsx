@@ -32,9 +32,13 @@ import {
   stringToColor,
   getLogOther,
   renderModelTag,
-  renderModelPriceSimple,
-  renderTieredModelPriceSimple,
 } from '../../../helpers';
+import { buildUsageLogBriefSummary } from './modals/usageLogDetailAdapter';
+import {
+  getDurationTone,
+  getFirstResponseTone,
+  getTimingToneStyles,
+} from './usageLogTiming';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
 
@@ -60,8 +64,9 @@ function formatRatio(ratio) {
   if (ratio === undefined || ratio === null) {
     return '-';
   }
-  if (typeof ratio === 'number') {
-    return ratio.toFixed(4);
+  const numericRatio = Number(ratio);
+  if (Number.isFinite(numericRatio)) {
+    return numericRatio.toFixed(4).replace(/\.?0+$/, '');
   }
   return String(ratio);
 }
@@ -144,10 +149,7 @@ function renderType(type, t) {
 
 function buildStreamStatusTooltip(ss, t) {
   if (!ss) return null;
-  const lines = [
-    t('流状态') + '：' + t('异常'),
-    (ss.end_reason || 'unknown'),
-  ];
+  const lines = [t('流状态') + '：' + t('异常'), ss.end_reason || 'unknown'];
   if (ss.error_count > 0) {
     lines.push(`${t('软错误')}: ${ss.error_count}`);
   }
@@ -163,98 +165,96 @@ function buildStreamStatusTooltip(ss, t) {
   );
 }
 
-function renderIsStream(bool, t, streamStatus) {
-  const isError = streamStatus && streamStatus.status !== 'ok';
-
-  if (bool) {
-    return (
-      <span style={{ position: 'relative', display: 'inline-block' }}>
-        <Tag color='blue' shape='circle'>
-          {t('流')}
-        </Tag>
-        {isError && (
-          <Tooltip content={buildStreamStatusTooltip(streamStatus, t)}>
-            <span
-              style={{
-                position: 'absolute',
-                right: -4,
-                top: -4,
-                lineHeight: 1,
-                color: '#ef4444',
-                cursor: 'pointer',
-                userSelect: 'none',
-              }}
-            >
-              <CircleAlert
-                size={14}
-                strokeWidth={2.5}
-                color='currentColor'
-              />
-            </span>
-          </Tooltip>
-        )}
+// Pite 风格紧凑耗时胶囊：状态圆点 + 等宽数字
+function renderTimePill(seconds, { tone, showDot = true }) {
+  const toneStyles = getTimingToneStyles(tone);
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '1px 8px',
+        borderRadius: 999,
+        border: `1px solid ${toneStyles.borderColor}`,
+        background: toneStyles.backgroundColor,
+        fontSize: 12,
+        lineHeight: '18px',
+        whiteSpace: 'nowrap',
+        color: toneStyles.color,
+      }}
+    >
+      {showDot && (
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: toneStyles.color,
+            flexShrink: 0,
+          }}
+        />
+      )}
+      <span
+        style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
+      >
+        {seconds} s
       </span>
-    );
-  } else {
-    return (
-      <Tag color='purple' shape='circle'>
-        {t('非流')}
-      </Tag>
-    );
-  }
+    </span>
+  );
 }
 
-function renderUseTime(type, t) {
-  const time = parseInt(type);
-  if (time < 101) {
-    return (
-      <Tag color='green' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  } else if (time < 300) {
-    return (
-      <Tag color='orange' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  } else {
-    return (
-      <Tag color='red' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  }
+function renderUseTimePill(type, t) {
+  const time = Number.parseInt(type, 10);
+  const duration = Number.isFinite(time) ? time : 0;
+  return renderTimePill(duration, { tone: getDurationTone(duration) });
 }
 
-function renderFirstUseTime(type, t) {
-  let time = parseFloat(type) / 1000.0;
-  time = time.toFixed(1);
-  if (time < 3) {
-    return (
-      <Tag color='green' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  } else if (time < 10) {
-    return (
-      <Tag color='orange' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  } else {
-    return (
-      <Tag color='red' shape='circle'>
-        {' '}
-        {time} s{' '}
-      </Tag>
-    );
-  }
+function renderFirstUseTimePill(type, t) {
+  const milliseconds = Number.parseFloat(type);
+  const responseTime = Number.isFinite(milliseconds) ? milliseconds : 0;
+  const time = (responseTime / 1000).toFixed(1);
+  return renderTimePill(time, {
+    tone: getFirstResponseTone(responseTime),
+    showDot: false,
+  });
+}
+
+// 生成速度：tokens / 秒
+function renderSpeedLine(record, other, t) {
+  const useTime = parseInt(record.use_time);
+  const completionTokens = parseInt(record.completion_tokens);
+  const speed =
+    useTime > 0 && completionTokens > 0
+      ? Math.round(completionTokens / useTime)
+      : 0;
+  const streamLabel = record.is_stream ? t('流') : t('非流');
+  const errorStatus = other?.stream_status;
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        marginTop: 2,
+        fontSize: 11,
+        color: 'var(--semi-color-text-2)',
+        whiteSpace: 'nowrap',
+        position: 'relative',
+      }}
+    >
+      {streamLabel}
+      {speed > 0 && <span>· {speed} t/s</span>}
+      {record.is_stream && errorStatus && errorStatus.status !== 'ok' && (
+        <Tooltip content={buildStreamStatusTooltip(errorStatus, t)}>
+          <span style={{ color: '#ef4444', cursor: 'pointer' }}>
+            <CircleAlert size={13} strokeWidth={2.5} color='currentColor' />
+          </span>
+        </Tooltip>
+      )}
+    </span>
+  );
 }
 
 function renderBillingTag(record, t) {
@@ -267,6 +267,29 @@ function renderBillingTag(record, t) {
     );
   }
   return null;
+}
+
+// Pite 风格紧凑费用胶囊
+function renderCostPill(quota) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 8px',
+        borderRadius: 999,
+        border: '1px solid var(--semi-color-border)',
+        background: 'var(--semi-color-bg-0)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontWeight: 700,
+        fontSize: 12,
+        lineHeight: '18px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {renderQuota(quota, 6)}
+    </span>
+  );
 }
 
 function renderModelName(record, copyText, t) {
@@ -387,6 +410,62 @@ function getUsageLogGroupSummary(groupRatio, userGroupRatio, t) {
   return `${useUserGroupRatio ? t('专属倍率') : t('分组')} ${formatRatio(ratio)}x`;
 }
 
+function getUsageLogGroupData(record) {
+  const other = getLogOther(record.other) || {};
+  const group = record.group || other.group;
+  const userGroupRatio = record.user_group_ratio ?? other.user_group_ratio;
+  const groupRatio = record.group_ratio ?? other.group_ratio;
+  const parsedUserGroupRatio = Number(userGroupRatio);
+  const useUserGroupRatio =
+    Number.isFinite(parsedUserGroupRatio) && parsedUserGroupRatio !== -1;
+  const ratio = useUserGroupRatio ? userGroupRatio : groupRatio;
+
+  return {
+    group,
+    ratio,
+  };
+}
+
+function renderUsageLogGroup(record, t) {
+  const { group, ratio } = getUsageLogGroupData(record);
+  if (!group) {
+    return <></>;
+  }
+
+  const parsedRatio = Number(ratio);
+  const hasRatio = Number.isFinite(parsedRatio) && parsedRatio !== -1;
+
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        lineHeight: 1.25,
+      }}
+    >
+      <div>{renderGroup(group)}</div>
+      {hasRatio && (
+        <span
+          style={{
+            marginTop: 2,
+            color: 'var(--semi-color-text-2)',
+            fontSize: 12,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {t('倍率')} · {formatRatio(parsedRatio)}x
+        </span>
+      )}
+    </div>
+  );
+}
+
+function getUsageLogReasoningEffort(record) {
+  const other = getLogOther(record.other);
+  return other?.reasoning_effort || record.reasoning_effort || '';
+}
+
 function renderCompactDetailSummary(summarySegments) {
   const segments = Array.isArray(summarySegments)
     ? summarySegments.filter((segment) => segment?.text)
@@ -461,7 +540,11 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     };
   }
 
-  const summaryOpts = { ...other, displayMode: billingDisplayMode, outputMode: 'segments' };
+  const summaryOpts = {
+    ...other,
+    displayMode: billingDisplayMode,
+    outputMode: 'segments',
+  };
 
   if (other?.billing_mode === 'tiered_expr') {
     return { segments: renderTieredModelPriceSimple(summaryOpts) };
@@ -480,6 +563,7 @@ export const getLogsColumns = ({
   copyText,
   showUserInfoFunc,
   openChannelAffinityUsageCacheModal,
+  openLogDetail,
   isAdminUser,
   billingDisplayMode = 'price',
 }) => {
@@ -645,27 +729,7 @@ export const getLogsColumns = ({
           record.type === 5 ||
           record.type === 6
         ) {
-          if (record.group) {
-            return <>{renderGroup(record.group)}</>;
-          } else {
-            let other = null;
-            try {
-              other = JSON.parse(record.other);
-            } catch (e) {
-              console.error(
-                `Failed to parse record.other: "${record.other}".`,
-                e,
-              );
-            }
-            if (other === null) {
-              return <></>;
-            }
-            if (other.group !== undefined) {
-              return <>{renderGroup(other.group)}</>;
-            } else {
-              return <></>;
-            }
-          }
+          return <>{renderUsageLogGroup(record, t)}</>;
         } else {
           return <></>;
         }
@@ -695,6 +759,31 @@ export const getLogsColumns = ({
       },
     },
     {
+      key: COLUMN_KEYS.REASONING,
+      title: (
+        <span style={{ whiteSpace: 'nowrap', display: 'inline-block' }}>
+          {t('推理强度')}
+        </span>
+      ),
+      dataIndex: 'reasoning_effort',
+      width: 96,
+      render: (text, record, index) => {
+        if (
+          !(
+            record.type === 0 ||
+            record.type === 2 ||
+            record.type === 5 ||
+            record.type === 6
+          )
+        ) {
+          return <></>;
+        }
+
+        const reasoningEffort = getUsageLogReasoningEffort(record);
+        return <span>{reasoningEffort || '-'}</span>;
+      },
+    },
+    {
       key: COLUMN_KEYS.USE_TIME,
       title: t('用时/首字'),
       dataIndex: 'use_time',
@@ -702,45 +791,42 @@ export const getLogsColumns = ({
         if (!(record.type === 2 || record.type === 5)) {
           return <></>;
         }
-        if (record.is_stream) {
-          let other = getLogOther(record.other);
-          return (
-            <>
-              <Space>
-                {renderUseTime(text, t)}
-                {renderFirstUseTime(other?.frt, t)}
-                {renderIsStream(record.is_stream, t, other?.stream_status)}
-              </Space>
-            </>
-          );
-        } else {
-          return (
-            <>
-              <Space>
-                {renderUseTime(text, t)}
-                {renderIsStream(record.is_stream, t)}
-              </Space>
-            </>
-          );
-        }
+        let other = getLogOther(record.other);
+        return (
+          <div
+            style={{
+              display: 'inline-flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              lineHeight: 1.3,
+            }}
+          >
+            <span
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              {renderUseTimePill(text, t)}
+              {other?.frt != null && renderFirstUseTimePill(other.frt, t)}
+            </span>
+            {renderSpeedLine(record, other, t)}
+          </div>
+        );
       },
     },
     {
-      key: COLUMN_KEYS.PROMPT,
-      title: (
-        <div className='flex items-center gap-1'>
-          {t('输入')}
-          <Tooltip
-            content={t(
-              '根据 Anthropic 协定，/v1/messages 的输入 tokens 仅统计非缓存输入，不包含缓存读取与缓存写入 tokens。',
-            )}
-          >
-            <IconHelpCircle className='text-gray-400 cursor-help' />
-          </Tooltip>
-        </div>
-      ),
+      key: COLUMN_KEYS.TOKENS,
+      title: t('Tokens'),
       dataIndex: 'prompt_tokens',
       render: (text, record, index) => {
+        if (
+          !(
+            record.type === 0 ||
+            record.type === 2 ||
+            record.type === 5 ||
+            record.type === 6
+          )
+        ) {
+          return <></>;
+        }
         const other = getLogOther(record.other);
         const cacheSummary = getPromptCacheSummary(other);
         const hasCacheRead = (cacheSummary?.cacheReadTokens || 0) > 0;
@@ -754,10 +840,7 @@ export const getLogsColumns = ({
           cacheText = `${t('缓存写')} ${formatTokenCount(cacheSummary.cacheWriteTokens)}`;
         }
 
-        return record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6 ? (
+        return (
           <div
             style={{
               display: 'inline-flex',
@@ -766,7 +849,10 @@ export const getLogsColumns = ({
               lineHeight: 1.2,
             }}
           >
-            <span>{text}</span>
+            <span style={{ whiteSpace: 'nowrap' }}>
+              {formatTokenCount(record.prompt_tokens)} /{' '}
+              {formatTokenCount(record.completion_tokens)}
+            </span>
             {cacheText ? (
               <span
                 style={{
@@ -778,32 +864,25 @@ export const getLogsColumns = ({
               >
                 {cacheText}
               </span>
-            ) : null}
+            ) : (
+              <span
+                style={{
+                  marginTop: 2,
+                  fontSize: 11,
+                  color: 'var(--semi-color-text-2)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {t('缓存')} 0
+              </span>
+            )}
           </div>
-        ) : (
-          <></>
-        );
-      },
-    },
-    {
-      key: COLUMN_KEYS.COMPLETION,
-      title: t('输出'),
-      dataIndex: 'completion_tokens',
-      render: (text, record, index) => {
-        return parseInt(text) > 0 &&
-          (record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6) ? (
-          <>{<span> {text} </span>}</>
-        ) : (
-          <></>
         );
       },
     },
     {
       key: COLUMN_KEYS.COST,
-      title: t('花费'),
+      title: t('费用'),
       dataIndex: 'quota',
       render: (text, record, index) => {
         if (
@@ -826,7 +905,7 @@ export const getLogsColumns = ({
             </Tooltip>
           );
         }
-        return <>{renderQuota(text, 6)}</>;
+        return renderCostPill(text);
       },
     },
     {
@@ -905,18 +984,12 @@ export const getLogsColumns = ({
       fixed: 'right',
       width: 200,
       render: (text, record, index) => {
-        const detailSummary = getUsageLogDetailSummary(
-          record,
-          text,
-          billingDisplayMode,
-          t,
-        );
-
-        if (!detailSummary) {
+        const brief = buildUsageLogBriefSummary(record, t);
+        if (!brief) {
           return (
             <Typography.Paragraph
               ellipsis={{
-                rows: 2,
+                rows: 1,
                 showTooltip: {
                   type: 'popover',
                   opts: { style: { width: 240 } },
@@ -928,8 +1001,20 @@ export const getLogsColumns = ({
             </Typography.Paragraph>
           );
         }
-
-        return renderCompactDetailSummary(detailSummary.segments);
+        // 参考新版 NewAPI：仅展示一行简要摘要，点击摘要打开详情模态框
+        return (
+          <button
+            type='button'
+            className='usage-log-detail-summary'
+            title={brief}
+            onClick={(event) => {
+              event.stopPropagation();
+              openLogDetail && openLogDetail(record);
+            }}
+          >
+            {brief}
+          </button>
+        );
       },
     },
   ];

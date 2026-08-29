@@ -38,6 +38,7 @@ type ChannelKeyUsage struct {
 	KeyFingerprint    string `json:"key_fingerprint" gorm:"size:64;uniqueIndex:idx_channel_key_fingerprint,priority:2"`
 	KeyIndex          int    `json:"key_index" gorm:"default:0"`
 	KeyMask           string `json:"key_mask" gorm:"size:64"`
+	KeyName           string `json:"key_name" gorm:"size:128;default:''"`
 	QuotaLimit        int64  `json:"quota_limit" gorm:"bigint;default:0"`
 	QuotaLimitUsed    int64  `json:"quota_limit_used" gorm:"bigint;default:0"`
 	QuotaLimitResetAt int64  `json:"quota_limit_reset_at" gorm:"bigint;default:0"`
@@ -87,9 +88,85 @@ type ChannelUsageStats struct {
 	Last30dQuota        int64   `json:"last30d_quota"`
 	Last30dTokenUsed    int64   `json:"last30d_token_used"`
 	Last30dRequestCount int64   `json:"last30d_request_count"`
+	QuotaLimitMode      string  `json:"quota_limit_mode"`
 	QuotaLimitUsed      int64   `json:"quota_limit_used"`
 	QuotaLimit          int64   `json:"quota_limit"`
 	Balance             float64 `json:"balance"`
+	// 多密钥限额汇总：仅在渠道启用密钥级限额（key/both 模式）时有意义。
+	// KeyQuotaLimit 只统计启用且配置了正数限额的密钥；
+	// 任一启用密钥未配置限额时 KeyQuotaUnlimited 为 true，展示层应显示无限。
+	KeyQuotaLimitUsed int64 `json:"key_quota_limit_used"`
+	KeyQuotaLimit     int64 `json:"key_quota_limit"`
+	KeyQuotaUnlimited bool  `json:"key_quota_unlimited"`
+}
+
+// channelKeyUsageAggregate 承载 channel_key_usages 的按渠道聚合结果。
+type channelKeyUsageAggregate struct {
+	ChannelID         int   `json:"channel_id"`
+	KeyQuotaLimitUsed int64 `json:"key_quota_limit_used"`
+	KeyQuotaLimit     int64 `json:"key_quota_limit"`
+	UnlimitedEnabled  int64 `json:"unlimited_enabled"`
+}
+
+func aggregateCurrentChannelKeyUsages(currentFingerprints map[int]map[string]struct{}, keyUsages []ChannelKeyUsage) (map[int]channelKeyUsageAggregate, map[int]map[string]struct{}) {
+	aggregates := make(map[int]channelKeyUsageAggregate)
+	matchedFingerprints := make(map[int]map[string]struct{})
+	for _, usage := range keyUsages {
+		fingerprints, isCurrentChannel := currentFingerprints[usage.ChannelId]
+		if !isCurrentChannel {
+			continue
+		}
+		if _, isCurrentKey := fingerprints[usage.KeyFingerprint]; !isCurrentKey {
+			continue
+		}
+
+		matched := matchedFingerprints[usage.ChannelId]
+		if matched == nil {
+			matched = make(map[string]struct{})
+			matchedFingerprints[usage.ChannelId] = matched
+		}
+		// The database has a unique identity index, but keeping this guard makes
+		// the displayed total correct even when legacy data contains duplicates.
+		if _, alreadyMatched := matched[usage.KeyFingerprint]; alreadyMatched {
+			continue
+		}
+		matched[usage.KeyFingerprint] = struct{}{}
+
+		aggregate := aggregates[usage.ChannelId]
+		aggregate.ChannelID = usage.ChannelId
+		if usage.Status == common.ChannelStatusEnabled {
+			aggregate.KeyQuotaLimitUsed += usage.QuotaLimitUsed
+			if usage.QuotaLimit > 0 {
+				aggregate.KeyQuotaLimit += usage.QuotaLimit
+			} else {
+				aggregate.UnlimitedEnabled = 1
+			}
+		}
+		aggregates[usage.ChannelId] = aggregate
+	}
+	return aggregates, matchedFingerprints
+}
+
+// buildCurrentChannelKeyFingerprints returns only the key identities currently
+// configured on each channel. channel_key_usages intentionally keeps historical
+// rows, so callers that display a current total must filter against this set.
+func buildCurrentChannelKeyFingerprints(channels []Channel) (map[int]map[string]struct{}, error) {
+	current := make(map[int]map[string]struct{})
+	for _, channel := range channels {
+		if !channel.UsesKeyQuota() {
+			continue
+		}
+		metas, err := buildChannelKeyMetas(channel.GetKeys())
+		if err != nil {
+			return nil, err
+		}
+		fingerprints := make(map[string]struct{}, len(metas))
+		for _, meta := range metas {
+			fingerprints[meta.Fingerprint] = struct{}{}
+		}
+		current[channel.Id] = fingerprints
+	}
+	return current, nil
 }
 
 func GetChannelKeyUsages(channel *Channel) ([]ChannelKeyUsage, error) {
@@ -145,6 +222,56 @@ func UpdateChannelKeyQuotaLimit(channelID int, fingerprint string, quotaLimit in
 			"quota_limit": quotaLimit,
 			"updated_at":  common.GetTimestamp(),
 		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// maxChannelKeyNameLength 限制密钥别名长度，避免表格与弹窗展示溢出。
+const maxChannelKeyNameLength = 128
+
+// UpdateChannelKeyUsageConfig 统一更新密钥别名与限额配置；传 nil 表示保持对应字段不变。
+// 别名仅用于展示，不参与鉴权，也不改变真实密钥、渠道归属、密钥顺序与启用状态。
+func UpdateChannelKeyUsageConfig(channelID int, fingerprint string, quotaLimit *int64, keyName *string) error {
+	if channelID <= 0 || strings.TrimSpace(fingerprint) == "" {
+		return errors.New("invalid channel key identity")
+	}
+	updates := map[string]interface{}{}
+	if quotaLimit != nil {
+		if *quotaLimit < 0 {
+			return errors.New("quota limit cannot be negative")
+		}
+		updates["quota_limit"] = *quotaLimit
+	}
+	if keyName != nil {
+		name := strings.TrimSpace(*keyName)
+		if len([]rune(name)) > maxChannelKeyNameLength {
+			return errors.New("密钥名称过长，最多 128 个字符")
+		}
+		if name != "" {
+			var duplicate int64
+			if err := DB.Model(&ChannelKeyUsage{}).
+				Where("channel_id = ? AND key_fingerprint != ? AND key_name = ?", channelID, fingerprint, name).
+				Count(&duplicate).Error; err != nil {
+				return err
+			}
+			if duplicate > 0 {
+				return errors.New("密钥名称与该渠道下的其他密钥重复")
+			}
+		}
+		updates["key_name"] = name
+	}
+	if len(updates) == 0 {
+		return errors.New("没有需要更新的密钥配置")
+	}
+	updates["updated_at"] = common.GetTimestamp()
+	result := DB.Model(&ChannelKeyUsage{}).
+		Where("channel_id = ? AND key_fingerprint = ?", channelID, fingerprint).
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -291,19 +418,65 @@ func GetChannelUsageStatsBatch(channelIDs []int, today string, start30d string) 
 	for _, chunk := range chunkChannelUsageStatsIDs(ids, 200) {
 		var channels []Channel
 		if err := DB.Model(&Channel{}).
-			Select("id", "quota_limit_mode", "quota_limit_used", "quota_limit", "balance").
+			Select("id", "key", "quota_limit_mode", "quota_limit_used", "quota_limit", "balance").
 			Where("id IN ?", chunk).
 			Find(&channels).Error; err != nil {
 			return nil, err
 		}
 		for _, channel := range channels {
 			stat := results[channel.Id]
-			if NormalizeQuotaLimitMode(channel.QuotaLimitMode) != ChannelQuotaLimitModeKey {
+			mode := NormalizeQuotaLimitMode(channel.QuotaLimitMode)
+			stat.QuotaLimitMode = mode
+			if mode != ChannelQuotaLimitModeKey {
 				stat.QuotaLimitUsed = channel.QuotaLimitUsed
 				stat.QuotaLimit = channel.QuotaLimit
 			}
 			stat.Balance = channel.Balance
 			results[channel.Id] = stat
+		}
+
+		currentFingerprints, err := buildCurrentChannelKeyFingerprints(channels)
+		if err != nil {
+			return nil, err
+		}
+
+		// 多密钥限额汇总：只聚合当前渠道配置中的密钥指纹。
+		// channel_key_usages 保留密钥变更前的历史记录，不能直接按 channel_id 求和。
+		var keyUsages []ChannelKeyUsage
+		if err := DB.Model(&ChannelKeyUsage{}).
+			Select("channel_id", "key_fingerprint", "status", "quota_limit_used", "quota_limit").
+			Where("channel_id IN ?", chunk).
+			Find(&keyUsages).Error; err != nil {
+			return nil, err
+		}
+		keyAggregates, matchedFingerprints := aggregateCurrentChannelKeyUsages(currentFingerprints, keyUsages)
+
+		for channelID, fingerprints := range currentFingerprints {
+			stat := results[channelID]
+			aggregate, hasAggregate := keyAggregates[channelID]
+			if hasAggregate {
+				stat.KeyQuotaLimitUsed = aggregate.KeyQuotaLimitUsed
+				stat.KeyQuotaLimit = aggregate.KeyQuotaLimit
+				stat.KeyQuotaUnlimited = aggregate.UnlimitedEnabled > 0
+			}
+			// 新密钥尚未产生记录时不能把历史密钥的有限额冒充为当前合计。
+			// 此时展示为无限，直到后台生成当前密钥记录或管理员完成配置。
+			if len(matchedFingerprints[channelID]) < len(fingerprints) {
+				stat.KeyQuotaUnlimited = true
+			}
+			results[channelID] = stat
+		}
+
+		// 没有当前密钥记录的 key/both 渠道视为未配置任何密钥限额（无限）。
+		for _, channel := range channels {
+			if _, found := currentFingerprints[channel.Id]; !found {
+				continue
+			}
+			if len(matchedFingerprints[channel.Id]) == 0 {
+				stat := results[channel.Id]
+				stat.KeyQuotaUnlimited = true
+				results[channel.Id] = stat
+			}
 		}
 
 		var aggregates []channelUsageDailyAggregate

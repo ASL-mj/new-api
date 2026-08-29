@@ -1,0 +1,17 @@
+.usage-logs-table-compact
+  .semi-table-thead
+  > .semi-table-row
+  > .semi-table-row-head,
+.usage-logs-table-compact
+  .semi-table-tbody
+  > .semi-table-row
+  > .semi-table-row-cell {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.usage-logs-table-compact .semi-table-thead .semi-table-row-head > *,
+.usage-logs-table-compact .semi-table-tbody .semi-table-row-cell > * {
+  white-space: nowrap;
+}

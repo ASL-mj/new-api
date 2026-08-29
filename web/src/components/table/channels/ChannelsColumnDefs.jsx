@@ -557,6 +557,7 @@ export const getChannelsColumns = ({
           stats={usageStats}
           loading={usageStatsLoading}
           error={usageStatsError}
+          t={t}
         />
       ),
     },

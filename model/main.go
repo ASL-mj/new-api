@@ -305,6 +305,7 @@ func migrateDB() error {
 			return err
 		}
 	}
+	backfillChannelSortOrder()
 	return nil
 }
 
@@ -401,6 +402,7 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	backfillChannelSortOrder()
 	common.SysLog("database migrated")
 	return nil
 }

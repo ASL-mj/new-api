@@ -22,11 +22,7 @@ import { Modal, Tag, Typography, Avatar } from '@douyinfe/semi-ui';
 import { getCurrencyConfig } from './currency';
 import { copy, showSuccess } from './utils';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
-import {
-  BILLING_PRICING_VARS,
-  BILLING_VAR_KEY_TO_FIELD,
-  BILLING_VAR_REGEX,
-} from '../constants';
+import { BILLING_PRICING_VARS } from '../constants';
 import { visit } from 'unist-util-visit';
 import * as LobeIcons from '@lobehub/icons';
 import {
@@ -1611,10 +1607,9 @@ function renderPriceSimpleCore({
 
 export function renderTaskBillingProcess(other, content) {
   if (other?.task_id != null) {
-    return renderBillingArticle(
-      [content].filter(Boolean),
-      { showReferenceNote: false },
-    );
+    return renderBillingArticle([content].filter(Boolean), {
+      showReferenceNote: false,
+    });
   }
   return renderBillingArticle([
     buildBillingText('任务预扣费（将在任务完成后按实际token重算）'),
@@ -2205,54 +2200,9 @@ export function renderLogContent(opts) {
   }
 }
 
-export function stripExprVersion(exprStr) {
-  if (!exprStr) return { version: 1, body: '' };
-  const m = exprStr.match(/^v(\d+):([\s\S]*)$/);
-  if (m) return { version: Number(m[1]), body: m[2] };
-  return { version: 1, body: exprStr };
-}
-
-function parseTierBody(bodyStr) {
-  const coeffs = {};
-  const re = new RegExp(BILLING_VAR_REGEX.source, 'g');
-  let m;
-  while ((m = re.exec(bodyStr)) !== null) {
-    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]);
-  }
-  const tier = {};
-  for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
-    tier[field] = coeffs[varName] || 0;
-  }
-  return tier;
-}
-
-export function parseTiersFromExpr(exprStr) {
-  if (!exprStr) return [];
-  try {
-    const { body } = stripExprVersion(exprStr);
-    const condGroup = `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`;
-    const tierRe = new RegExp(`(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`, 'g');
-    const tiers = [];
-    let m;
-    while ((m = tierRe.exec(body)) !== null) {
-      const condStr = m[1] || '';
-      const conditions = [];
-      if (condStr) {
-        for (const cp of condStr.split(/\s*&&\s*/)) {
-          const cm = cp.trim().match(/^(p|c|len)\s*(<|<=|>|>=)\s*([\d.eE+]+)$/);
-          if (cm) conditions.push({ var: cm[1], op: cm[2], value: Number(cm[3]) });
-        }
-      }
-      const tier = parseTierBody(m[3]);
-      tier.label = m[2];
-      tier.conditions = conditions;
-      tiers.push(tier);
-    }
-    return tiers;
-  } catch {
-    return [];
-  }
-}
+// 阶梯计费表达式解析已抽取至 ./billingExpr（纯函数），此处保留导出以兼容既有引用。
+export { stripExprVersion, parseTiersFromExpr } from './billingExpr';
+import { stripExprVersion, parseTiersFromExpr } from './billingExpr';
 
 export function renderTieredModelPrice(opts) {
   const {
@@ -2267,7 +2217,11 @@ export function renderTieredModelPrice(opts) {
     cache_creation_tokens_1h: cacheCreationTokens1h = 0,
   } = opts;
   let exprStr = '';
-  try { exprStr = atob(exprB64); } catch { /* ignore */ }
+  try {
+    exprStr = atob(exprB64);
+  } catch {
+    /* ignore */
+  }
   const tiers = parseTiersFromExpr(exprStr);
   if (tiers.length === 0) {
     return i18next.t('阶梯计费（表达式解析失败）');
@@ -2284,7 +2238,11 @@ export function renderTieredModelPrice(opts) {
     ...priceLines
       .filter(([field]) => tier[field] > 0)
       .map(([field, label]) =>
-        buildBillingPriceText(`${label}：{{symbol}}{{price}} / 1M tokens`, { symbol, usdAmount: tier[field], rate }),
+        buildBillingPriceText(`${label}：{{symbol}}{{price}} / 1M tokens`, {
+          symbol,
+          usdAmount: tier[field],
+          rate,
+        }),
       ),
   ];
 
@@ -2305,7 +2263,11 @@ export function renderTieredModelPriceSimple(opts) {
     outputMode = 'segments',
   } = opts;
   let exprStr = '';
-  try { exprStr = atob(exprB64); } catch { /* ignore */ }
+  try {
+    exprStr = atob(exprB64);
+  } catch {
+    /* ignore */
+  }
   const tiers = parseTiersFromExpr(exprStr);
   const tier = tiers.find((t) => t.label === matchedTier) || tiers[0];
 
@@ -2318,7 +2280,10 @@ export function renderTieredModelPriceSimple(opts) {
     ];
 
     if (tier && isPriceDisplayMode(displayMode)) {
-      const priceSegments = BILLING_PRICING_VARS.map((v) => [v.field, v.shortLabel]);
+      const priceSegments = BILLING_PRICING_VARS.map((v) => [
+        v.field,
+        v.shortLabel,
+      ]);
       for (const [field, label] of priceSegments) {
         if (tier[field] > 0) {
           segments.push({

@@ -253,49 +253,6 @@ export const useDashboardCharts = (
     },
   });
 
-  const [spec_rank_bar, setSpecRankBar] = useState({
-    type: 'bar',
-    data: [
-      {
-        id: 'rankData',
-        values: [],
-      },
-    ],
-    xField: 'Model',
-    yField: 'Count',
-    seriesField: 'Model',
-    legends: {
-      visible: true,
-      selectMode: 'single',
-    },
-    title: {
-      visible: true,
-      text: t('模型调用次数排行'),
-      subtext: '',
-    },
-    bar: {
-      state: {
-        hover: {
-          stroke: '#000',
-          lineWidth: 1,
-        },
-      },
-    },
-    tooltip: {
-      mark: {
-        content: [
-          {
-            key: (datum) => datum['Model'],
-            value: (datum) => renderNumber(datum['Count']),
-          },
-        ],
-      },
-    },
-    color: {
-      specified: modelColorMap,
-    },
-  });
-
   // ========== Admin: 用户消耗排行 ==========
   const [spec_user_rank, setSpecUserRank] = useState({
     type: 'bar',
@@ -527,40 +484,12 @@ export const useDashboardCharts = (
       });
       modelLineData.sort((a, b) => a.Time.localeCompare(b.Time));
 
-      // ===== 模型调用次数排行柱状图 =====
-      const MAX_RANK_MODELS = 20;
-      const allRankData = Array.from(modelTotals)
-        .map(([model, count]) => ({
-          Model: model,
-          Count: count,
-        }))
-        .sort((a, b) => b.Count - a.Count);
-
-      let rankData;
-      if (allRankData.length > MAX_RANK_MODELS) {
-        const topModels = allRankData.slice(0, MAX_RANK_MODELS);
-        const otherCount = allRankData
-          .slice(MAX_RANK_MODELS)
-          .reduce((sum, item) => sum + item.Count, 0);
-        rankData = [...topModels, { Model: t('其他'), Count: otherCount }];
-      } else {
-        rankData = allRankData;
-      }
-
       updateChartSpec(
         setSpecModelLine,
         modelLineData,
         `${t('总计')}：${renderNumber(totalTimes)}`,
         newModelColors,
         'lineData',
-      );
-
-      updateChartSpec(
-        setSpecRankBar,
-        rankData,
-        `${t('总计')}：${renderNumber(totalTimes)}`,
-        newModelColors,
-        'rankData',
       );
 
       setPieData(newPieData);
@@ -666,7 +595,6 @@ export const useDashboardCharts = (
     spec_pie,
     spec_line,
     spec_model_line,
-    spec_rank_bar,
     spec_user_rank,
     userRankMetric,
     setUserRankMetric,

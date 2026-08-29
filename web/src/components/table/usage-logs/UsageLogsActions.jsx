@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Tag, Space, Skeleton } from '@douyinfe/semi-ui';
-import { renderQuota } from '../../../helpers';
+import { Tag, Space, Skeleton, Tooltip } from '@douyinfe/semi-ui';
+import { renderQuota, renderNumber } from '../../../helpers';
 import CompactModeToggle from '../../common/ui/CompactModeToggle';
 import { useMinimumLoadingTime } from '../../../hooks/common/useMinimumLoadingTime';
 
@@ -39,8 +39,11 @@ const LogsActions = ({
       <Skeleton.Title style={{ width: 108, height: 21, borderRadius: 6 }} />
       <Skeleton.Title style={{ width: 65, height: 21, borderRadius: 6 }} />
       <Skeleton.Title style={{ width: 64, height: 21, borderRadius: 6 }} />
+      <Skeleton.Title style={{ width: 72, height: 21, borderRadius: 6 }} />
     </Space>
   );
+
+  const totalTokens = Number(stat?.token ?? 0);
 
   return (
     <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
@@ -57,6 +60,23 @@ const LogsActions = ({
           >
             {t('消耗额度')}: {renderQuota(stat.quota)}
           </Tag>
+          <Tooltip
+            content={t(
+              '当前筛选范围内 Token 总消耗（输入 + 输出），与消耗额度统计口径一致',
+            )}
+          >
+            <Tag
+              color='cyan'
+              style={{
+                fontWeight: 500,
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                padding: 13,
+              }}
+              className='!rounded-lg'
+            >
+              {t('消耗 Token')}: {renderNumber(totalTokens)}
+            </Tag>
+          </Tooltip>
           <Tag
             color='pink'
             style={{

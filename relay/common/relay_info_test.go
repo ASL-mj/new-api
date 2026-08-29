@@ -3,9 +3,29 @@ package common
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRequestReasoningEffortReadsOpenAIRequest(t *testing.T) {
+	request := &dto.GeneralOpenAIRequest{ReasoningEffort: " high "}
+
+	require.Equal(t, "high", requestReasoningEffort(request))
+}
+
+func TestRequestReasoningEffortReadsResponsesRequest(t *testing.T) {
+	request := &dto.OpenAIResponsesRequest{
+		Reasoning: &dto.Reasoning{Effort: "medium"},
+	}
+
+	require.Equal(t, "medium", requestReasoningEffort(request))
+}
+
+func TestRequestReasoningEffortHandlesMissingRequestField(t *testing.T) {
+	require.Empty(t, requestReasoningEffort(&dto.OpenAIResponsesRequest{}))
+	require.Empty(t, requestReasoningEffort(nil))
+}
 
 func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
 	info := &RelayInfo{

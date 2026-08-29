@@ -3106,3 +3106,164 @@ func TestFingerprintChannelKeyReturnsErrorWhenSecretUnavailable(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, fingerprint)
 }
+
+func int64Ptr(v int64) *int64 {
+	return &v
+}
+
+func TestGetChannelUsageStatsBatchAggregatesKeyQuotaLimits(t *testing.T) {
+	prepareChannelUsageTable(t)
+	fingerprint := func(key string) string {
+		value, err := FingerprintChannelKey(key)
+		require.NoError(t, err)
+		return value
+	}
+
+	require.NoError(t, DB.Create([]*Channel{
+		{
+			Id: 1301, Name: "key-partial", Key: "sk-a\nsk-b\nsk-c",
+			QuotaLimitMode: ChannelQuotaLimitModeKey,
+			ChannelInfo:    ChannelInfo{IsMultiKey: true, MultiKeySize: 3},
+		},
+		{
+			Id: 1302, Name: "key-all-limited", Key: "sk-d\nsk-e\nsk-f",
+			QuotaLimitMode: ChannelQuotaLimitModeKey,
+			ChannelInfo:    ChannelInfo{IsMultiKey: true, MultiKeySize: 3},
+		},
+		{
+			Id: 1303, Name: "channel-mode", Key: "sk-g",
+			QuotaLimitMode: ChannelQuotaLimitModeChannel,
+			QuotaLimit:     700, QuotaLimitUsed: 210,
+		},
+		{
+			Id: 1304, Name: "both-mode", Key: "sk-h\nsk-i",
+			QuotaLimitMode: ChannelQuotaLimitModeBoth,
+			QuotaLimit:     900, QuotaLimitUsed: 100,
+			ChannelInfo: ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
+		},
+		{
+			Id: 1305, Name: "key-no-usage", Key: "sk-j\nsk-k",
+			QuotaLimitMode: ChannelQuotaLimitModeKey,
+			ChannelInfo:    ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
+		},
+	}).Error)
+
+	// 1301：启用密钥 1/2 有限额，密钥 3 启用但无限额 → 合计 300 且存在无限额密钥
+	// 1302：启用密钥 1/2 有限额，密钥 3 已自动禁用（不参与合计）
+	// 1304：both 模式，渠道级与密钥级同时存在
+	require.NoError(t, DB.Create([]*ChannelKeyUsage{
+		{ChannelId: 1301, KeyFingerprint: fingerprint("sk-a"), KeyIndex: 0, KeyMask: "sk-a", QuotaLimit: 100, QuotaLimitUsed: 40, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1301, KeyFingerprint: fingerprint("sk-b"), KeyIndex: 1, KeyMask: "sk-b", QuotaLimit: 200, QuotaLimitUsed: 30, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1301, KeyFingerprint: fingerprint("sk-c"), KeyIndex: 2, KeyMask: "sk-c", QuotaLimit: 0, QuotaLimitUsed: 5, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		// Historical record from a previous key must not be included in the current total.
+		{ChannelId: 1301, KeyFingerprint: "historical-key", KeyIndex: 0, KeyMask: "sk-old", QuotaLimit: 999, QuotaLimitUsed: 999, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1302, KeyFingerprint: fingerprint("sk-d"), KeyIndex: 0, KeyMask: "sk-d", QuotaLimit: 100, QuotaLimitUsed: 40, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1302, KeyFingerprint: fingerprint("sk-e"), KeyIndex: 1, KeyMask: "sk-e", QuotaLimit: 150, QuotaLimitUsed: 60, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1302, KeyFingerprint: fingerprint("sk-f"), KeyIndex: 2, KeyMask: "sk-f", QuotaLimit: 999, QuotaLimitUsed: 500, Status: common.ChannelStatusAutoDisabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1304, KeyFingerprint: fingerprint("sk-h"), KeyIndex: 0, KeyMask: "sk-h", QuotaLimit: 120, QuotaLimitUsed: 45, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+		{ChannelId: 1304, KeyFingerprint: fingerprint("sk-i"), KeyIndex: 1, KeyMask: "sk-i", QuotaLimit: 80, QuotaLimitUsed: 5, Status: common.ChannelStatusEnabled, CreatedAt: 1, UpdatedAt: 1},
+	}).Error)
+
+	stats, err := GetChannelUsageStatsBatch([]int{1301, 1302, 1303, 1304, 1305}, "2026-08-01", "2026-07-03")
+	require.NoError(t, err)
+	require.Len(t, stats, 5)
+
+	partial := stats[1301]
+	assert.Equal(t, ChannelQuotaLimitModeKey, partial.QuotaLimitMode)
+	assert.EqualValues(t, 75, partial.KeyQuotaLimitUsed)
+	assert.EqualValues(t, 300, partial.KeyQuotaLimit)
+	assert.True(t, partial.KeyQuotaUnlimited)
+
+	allLimited := stats[1302]
+	assert.Equal(t, ChannelQuotaLimitModeKey, allLimited.QuotaLimitMode)
+	assert.EqualValues(t, 100, allLimited.KeyQuotaLimitUsed)
+	assert.EqualValues(t, 250, allLimited.KeyQuotaLimit)
+	assert.False(t, allLimited.KeyQuotaUnlimited)
+	assert.Zero(t, allLimited.QuotaLimit)
+
+	channelMode := stats[1303]
+	assert.Equal(t, ChannelQuotaLimitModeChannel, channelMode.QuotaLimitMode)
+	assert.EqualValues(t, 210, channelMode.QuotaLimitUsed)
+	assert.EqualValues(t, 700, channelMode.QuotaLimit)
+
+	bothMode := stats[1304]
+	assert.Equal(t, ChannelQuotaLimitModeBoth, bothMode.QuotaLimitMode)
+	assert.EqualValues(t, 100, bothMode.QuotaLimitUsed)
+	assert.EqualValues(t, 900, bothMode.QuotaLimit)
+	assert.EqualValues(t, 50, bothMode.KeyQuotaLimitUsed)
+	assert.EqualValues(t, 200, bothMode.KeyQuotaLimit)
+	assert.False(t, bothMode.KeyQuotaUnlimited)
+
+	// 尚无用量记录的 key 模式渠道：视为未配置任何限额（无限）
+	noUsage := stats[1305]
+	assert.Equal(t, ChannelQuotaLimitModeKey, noUsage.QuotaLimitMode)
+	assert.True(t, noUsage.KeyQuotaUnlimited)
+	assert.Zero(t, noUsage.KeyQuotaLimitUsed)
+}
+
+func TestAggregateCurrentChannelKeyUsagesIgnoresHistoryAndDuplicateIdentity(t *testing.T) {
+	current := map[int]map[string]struct{}{
+		20: {
+			"current-a": {},
+			"current-b": {},
+		},
+	}
+	usages := []ChannelKeyUsage{
+		{ChannelId: 20, KeyFingerprint: "historical", Status: common.ChannelStatusEnabled, QuotaLimit: 999, QuotaLimitUsed: 999},
+		{ChannelId: 20, KeyFingerprint: "current-a", Status: common.ChannelStatusEnabled, QuotaLimit: 29, QuotaLimitUsed: 4},
+		{ChannelId: 20, KeyFingerprint: "current-b", Status: common.ChannelStatusEnabled, QuotaLimit: 29, QuotaLimitUsed: 5},
+		// Defensive coverage for imported legacy data without a unique identity index.
+		{ChannelId: 20, KeyFingerprint: "current-a", Status: common.ChannelStatusEnabled, QuotaLimit: 1000, QuotaLimitUsed: 1000},
+	}
+
+	aggregates, matched := aggregateCurrentChannelKeyUsages(current, usages)
+	assert.Equal(t, map[int]channelKeyUsageAggregate{
+		20: {ChannelID: 20, KeyQuotaLimitUsed: 9, KeyQuotaLimit: 58},
+	}, aggregates)
+	assert.Equal(t, map[int]map[string]struct{}{
+		20: {"current-a": {}, "current-b": {}},
+	}, matched)
+}
+
+func TestGetKeysNormalizesMultikeyFormatting(t *testing.T) {
+	channel := Channel{Key: "  sk-a \r\n\r\n sk-b\t\r"}
+	assert.Equal(t, []string{"sk-a", "sk-b"}, channel.GetKeys())
+
+	cached := Channel{Key: "ignored", Keys: []string{" sk-a ", "", "sk-b\r"}}
+	assert.Equal(t, []string{"sk-a", "sk-b"}, cached.GetKeys())
+}
+
+func TestBackfillChannelSortOrderKeepsExistingOrderAndSkipsSorted(t *testing.T) {
+	prepareChannelUsageTable(t)
+
+	require.NoError(t, DB.Create([]*Channel{
+		{Id: 1501, Name: "a", Key: "sk-a", Priority: int64Ptr(30)},
+		{Id: 1502, Name: "b", Key: "sk-b", Priority: int64Ptr(20)},
+		{Id: 1503, Name: "c", Key: "sk-c", Priority: int64Ptr(10)},
+		{Id: 1504, Name: "sorted", Key: "sk-d", SortOrder: 7},
+	}).Error)
+
+	backfillChannelSortOrder()
+
+	var channels []Channel
+	require.NoError(t, DB.Order("id asc").Find(&channels).Error)
+	require.Len(t, channels, 4)
+	byID := make(map[int]Channel, len(channels))
+	for _, ch := range channels {
+		byID[ch.Id] = ch
+	}
+	// 已排序渠道保持不变
+	assert.EqualValues(t, 7, byID[1504].SortOrder)
+	// 未排序渠道按 priority desc, id desc 排在已有最大值之后
+	assert.Greater(t, byID[1501].SortOrder, int64(7))
+	assert.Greater(t, byID[1502].SortOrder, byID[1501].SortOrder)
+	assert.Greater(t, byID[1503].SortOrder, byID[1502].SortOrder)
+
+	// 重复执行不改变结果
+	backfillChannelSortOrder()
+	var channelsAfter []Channel
+	require.NoError(t, DB.Order("id asc").Find(&channelsAfter).Error)
+	for i, ch := range channelsAfter {
+		assert.Equal(t, channels[i].SortOrder, ch.SortOrder)
+	}
+}

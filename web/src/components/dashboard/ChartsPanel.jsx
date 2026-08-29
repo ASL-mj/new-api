@@ -28,7 +28,6 @@ const ChartsPanel = ({
   spec_line,
   spec_model_line,
   spec_pie,
-  spec_rank_bar,
   spec_user_rank,
   userRankMetric,
   setUserRankMetric,
@@ -58,7 +57,6 @@ const ChartsPanel = ({
             <TabPane tab={<span>{t('消耗分布')}</span>} itemKey='1' />
             <TabPane tab={<span>{t('调用趋势')}</span>} itemKey='2' />
             <TabPane tab={<span>{t('调用次数分布')}</span>} itemKey='3' />
-            <TabPane tab={<span>{t('调用次数排行')}</span>} itemKey='4' />
             {isAdminUser && (
               <TabPane tab={<span>{t('用户排行')}</span>} itemKey='5' />
             )}
@@ -79,9 +77,6 @@ const ChartsPanel = ({
         )}
         {activeChartTab === '3' && (
           <VChart spec={spec_pie} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '4' && (
-          <VChart spec={spec_rank_bar} option={CHART_CONFIG} />
         )}
         {activeChartTab === '5' && isAdminUser && (
           <div className='h-full flex flex-col gap-2'>
