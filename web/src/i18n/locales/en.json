@@ -4071,7 +4071,21 @@
     "费用": "Cost",
     "消耗明细": "Usage Details",
     "列表展示顺序，数字越小越靠前；不影响调度优先级": "Display order in the channel list; smaller numbers come first. Does not affect scheduling priority.",
+    "渠道展示排序": "Channel display order",
     "阶梯": "Tiered",
+    "重置全部成功": "All keys reset successfully",
+    "重置全部失败": "Failed to reset all keys",
+    "确定要重置当前渠道的全部密钥吗？": "Reset all keys for this channel?",
+    "将清零全部密钥的已用限额，并恢复自动禁用的密钥；手动禁用的密钥不会改变。": "This clears used quota for all keys and enables automatically disabled keys; manually disabled keys are unchanged.",
+    "外部平台内联菜单": "Inline external platform menus",
+    "配置后将在站内以网页形式打开，可选择顶栏或现有侧边栏分组": "Configured pages open inside the site. Choose the header or an existing sidebar section.",
+    "新增菜单": "Add menu",
+    "菜单名称": "Menu name",
+    "菜单描述": "Menu description",
+    "自定义菜单": "Custom menu",
+    "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Enter a custom menu name and a valid http or https URL.",
+    "确定删除这个自定义菜单吗？": "Delete this custom menu?",
+    "外部平台地址未配置或不可用": "The external platform URL is missing or unavailable",
     "{{price}}/1M Token": "{{price}}/1M Token"
   }
 }

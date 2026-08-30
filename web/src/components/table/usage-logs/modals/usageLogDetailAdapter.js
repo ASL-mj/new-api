@@ -96,6 +96,15 @@ const isViolationFeeLog = (other) =>
   Boolean(other?.violation_fee_code) ||
   Boolean(other?.violation_fee_marker);
 
+// 管理员调整用户额度的日志没有独立类型，后端以管理日志的 content 记录操作。
+// 只识别额度调整语句，避免把其他管理操作误渲染成额度详情。
+export const isAdminQuotaAdjustmentLog = (record) =>
+  record?.type === 3 &&
+  /管理员(?:增加|减少|覆盖)用户额度/.test(String(record.content || ''));
+
+const getAdminQuotaAdjustmentContent = (content) =>
+  String(content || '').replace(/^管理员(?=增加|减少|覆盖)/, '已');
+
 // 标准倍率计费：model_ratio * 2 = $X / 1M tokens（与 renderModelPrice 口径一致）
 const buildStandardBillingItems = (record, other, t) => {
   const modelRatio = toNum(other.model_ratio);
@@ -313,6 +322,7 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
   }
   const other = getLogOther(record.other) || {};
   const { extraRows, findRow } = splitExpandRows(expandRows, t);
+  const isQuotaAdjustment = isAdminQuotaAdjustmentLog(record);
 
   const isModelMapped =
     other.is_model_mapped &&
@@ -346,7 +356,11 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
   return {
     id: record.id,
     type: record.type,
-    typeLabel: record.type === 2 ? t('消耗') : t('记录'),
+    typeLabel: isQuotaAdjustment
+      ? t('管理')
+      : record.type === 2
+        ? t('消耗')
+        : t('记录'),
     createdAt: record.timestamp2string || formatTimestamp(record.created_at),
     requestId: record.request_id || '',
     group: record.group || other.group || '-',
@@ -378,7 +392,10 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
       : null,
     requestPath: other.request_path || null,
     nativeContent: findRow('日志详情')?.value || null,
-    contentText: record.content || null,
+    contentText: isQuotaAdjustment
+      ? getAdminQuotaAdjustmentContent(record.content)
+      : record.content || null,
+    isAdminQuotaAdjustment: isQuotaAdjustment,
     extraRows,
   };
 }
@@ -394,6 +411,9 @@ export function buildUsageLogBriefSummary(record, t) {
   }
   if (record.type === 6) {
     return t('异步任务退款');
+  }
+  if (isAdminQuotaAdjustmentLog(record)) {
+    return getAdminQuotaAdjustmentContent(record.content);
   }
   if (record.type !== 2) {
     return t('查看详情');

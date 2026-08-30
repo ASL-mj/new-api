@@ -3928,7 +3928,21 @@
     "费用": "Coût",
     "消耗明细": "Détails de consommation",
     "列表展示顺序，数字越小越靠前；不影响调度优先级": "Ordre d'affichage dans la liste des canaux ; les petits chiffres en premier. N'affecte pas la priorité de planification.",
+    "渠道展示排序": "Ordre d'affichage du canal",
     "阶梯": "Palier",
+    "重置全部成功": "Toutes les clés ont été réinitialisées",
+    "重置全部失败": "Échec de la réinitialisation des clés",
+    "确定要重置当前渠道的全部密钥吗？": "Réinitialiser toutes les clés de ce canal ?",
+    "将清零全部密钥的已用限额，并恢复自动禁用的密钥；手动禁用的密钥不会改变。": "L'utilisation des quotas sera remise à zéro et les clés désactivées automatiquement seront réactivées ; les clés désactivées manuellement resteront inchangées.",
+    "外部平台内联菜单": "Menus de plateformes externes intégrés",
+    "配置后将在站内以网页形式打开，可选择顶栏或现有侧边栏分组": "Les pages configurées s'ouvrent dans le site. Choisissez l'en-tête ou une section existante de la barre latérale.",
+    "新增菜单": "Ajouter un menu",
+    "菜单名称": "Nom du menu",
+    "菜单描述": "Description du menu",
+    "自定义菜单": "Menu personnalisé",
+    "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Saisissez un nom de menu et une URL http ou https valide.",
+    "确定删除这个自定义菜单吗？": "Supprimer ce menu personnalisé ?",
+    "外部平台地址未配置或不可用": "L'URL de la plateforme externe est absente ou indisponible",
     "{{price}}/1M Token": "{{price}}/1M Token"
   }
 }

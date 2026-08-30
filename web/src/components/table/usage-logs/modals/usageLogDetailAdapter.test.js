@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   buildUsageLogDetail,
   buildUsageLogBriefSummary,
+  isAdminQuotaAdjustmentLog,
 } from './usageLogDetailAdapter';
 
 const storage = new Map();
@@ -204,6 +205,37 @@ describe('usage log detail adapter', () => {
     expect(
       buildUsageLogDetail({ record: null, expandRows: [], t: identityT }),
     ).toBeNull();
+  });
+
+  test('formats administrator quota adjustments as management records', () => {
+    const record = {
+      ...baseLog,
+      type: 3,
+      content: '管理员增加用户额度 ＄105.000000 额度',
+    };
+    expect(isAdminQuotaAdjustmentLog(record)).toBe(true);
+    expect(buildUsageLogBriefSummary(record, identityT)).toBe(
+      '已增加用户额度 ＄105.000000 额度',
+    );
+
+    const detail = buildUsageLogDetail({
+      record,
+      expandRows: [],
+      t: identityT,
+    });
+    expect(detail.isAdminQuotaAdjustment).toBe(true);
+    expect(detail.typeLabel).toBe('管理');
+    expect(detail.contentText).toBe('已增加用户额度 ＄105.000000 额度');
+  });
+
+  test('does not classify unrelated management records as quota adjustments', () => {
+    const record = {
+      ...baseLog,
+      type: 3,
+      content: '管理员修改用户分组',
+    };
+    expect(isAdminQuotaAdjustmentLog(record)).toBe(false);
+    expect(buildUsageLogBriefSummary(record, identityT)).toBe('查看详情');
   });
 
   test('builds one-line brief summary for the details column', () => {

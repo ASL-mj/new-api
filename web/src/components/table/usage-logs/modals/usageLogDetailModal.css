@@ -142,6 +142,40 @@ body[theme-mode='dark'] .uldm-dialog {
   overflow: auto;
 }
 
+/* 管理员额度调整日志：内容很短，按参考页面保留一条分隔线和单独的内容面板。 */
+.uldm-management-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px 24px 24px;
+}
+
+.uldm-management-rule {
+  border-top: 4px solid var(--uldm-line-strong);
+}
+
+.uldm-management-content {
+  border: 1px solid var(--uldm-line-strong);
+}
+
+.uldm-management-content-title {
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--uldm-line-strong);
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.uldm-management-content-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 74px;
+  padding: 16px 20px;
+  font-size: 16px;
+  font-weight: 750;
+}
+
 /* 请求概览 */
 .uldm-overview {
   display: grid;

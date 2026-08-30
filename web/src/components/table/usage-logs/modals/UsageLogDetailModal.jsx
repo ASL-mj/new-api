@@ -31,6 +31,30 @@ import './usageLogDetailModal.css';
 
 const formatCount = (value) => Number(value || 0).toLocaleString();
 
+const AdminQuotaDetail = ({ detail, t, onCopy }) => (
+  <div className='uldm-management-body'>
+    <div className='uldm-management-rule' />
+    <section className='uldm-management-content'>
+      <h3 className='uldm-management-content-title'>{t('内容')}</h3>
+      <div className='uldm-management-content-value'>
+        <span>{detail.contentText || '-'}</span>
+        {detail.contentText && (
+          <Tooltip content={t('复制')}>
+            <button
+              type='button'
+              className='uldm-copy-btn'
+              aria-label={t('复制')}
+              onClick={(event) => onCopy(event, detail.contentText)}
+            >
+              <IconCopy size='small' />
+            </button>
+          </Tooltip>
+        )}
+      </div>
+    </section>
+  </div>
+);
+
 const UsageLogDetailModal = ({
   showLogDetail,
   closeLogDetail,
@@ -104,265 +128,275 @@ const UsageLogDetailModal = ({
             </button>
           </header>
 
-          <div className='uldm-body'>
-            {/* 请求概览：六个字段固定为三行两列，请求 ID 与分组同一行 */}
-            <section className='uldm-overview'>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('请求 ID')}</span>
-                <span className='uldm-kv-value uldm-mono'>
-                  {detail.requestId ? (
-                    <span
-                      title={detail.requestId}
-                      onClick={(event) => handleCopy(event, detail.requestId)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      {detail.requestId}
-                    </span>
-                  ) : (
-                    '-'
-                  )}
-                </span>
-              </div>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('分组')}</span>
-                <span className='uldm-kv-value uldm-mono'>{detail.group}</span>
-              </div>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('令牌')}</span>
-                <span className='uldm-kv-value uldm-mono'>
-                  {detail.tokenName}
-                </span>
-              </div>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('调用模型')}</span>
-                <span className='uldm-kv-value uldm-mono'>
-                  {detail.modelName}
-                  {detail.upstreamModelName && (
-                    <Tooltip
-                      content={`${t('实际模型')}：${detail.upstreamModelName}`}
-                    >
+          {detail.isAdminQuotaAdjustment ? (
+            <AdminQuotaDetail detail={detail} t={t} onCopy={handleCopy} />
+          ) : (
+            <div className='uldm-body'>
+              {/* 请求概览：六个字段固定为三行两列，请求 ID 与分组同一行 */}
+              <section className='uldm-overview'>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('请求 ID')}</span>
+                  <span className='uldm-kv-value uldm-mono'>
+                    {detail.requestId ? (
                       <span
-                        className='uldm-accent'
-                        style={{ marginLeft: 6, fontSize: 11 }}
+                        title={detail.requestId}
+                        onClick={(event) => handleCopy(event, detail.requestId)}
+                        style={{ cursor: 'pointer' }}
                       >
-                        → {detail.upstreamModelName}
+                        {detail.requestId}
                       </span>
-                    </Tooltip>
-                  )}
-                </span>
-              </div>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('推理强度')}</span>
-                <span
-                  className={`uldm-kv-value ${detail.reasoningEffort ? 'uldm-accent' : ''}`}
-                >
-                  {detail.reasoningEffort || '-'}
-                </span>
-              </div>
-              <div className='uldm-kv'>
-                <span className='uldm-kv-label'>{t('响应时间')}</span>
-                <span className='uldm-kv-value uldm-success uldm-mono'>
-                  {detail.useTime.toFixed(1)}s
-                  {detail.frtSeconds != null && (
-                    <small className='uldm-frt'>
-                      {' '}
-                      (FRT: {detail.frtSeconds}s)
-                    </small>
-                  )}
-                  {detail.speed > 0 && (
-                    <small className='uldm-frt'>
-                      {' '}
-                      · {detail.isStream ? t('流') : t('非流')} {detail.speed}{' '}
-                      t/s
-                    </small>
-                  )}
-                </span>
-              </div>
-            </section>
-
-            {/* 消耗明细：输入 / 输出 / 缓存读取 / 总 Token 一行四项 */}
-            <section className='uldm-section'>
-              <div className='uldm-section-head'>
-                <h3 className='uldm-section-title'>{t('消耗明细')}</h3>
-                <div className='uldm-section-tools'>
-                  {detail.requestPath && (
-                    <>
-                      <span>{t('路径')}</span>
-                      <code className='uldm-path'>{detail.requestPath}</code>
-                      <Tooltip content={t('复制路径')}>
-                        <button
-                          className='uldm-copy-btn'
-                          aria-label={t('复制路径')}
-                          onClick={(event) =>
-                            handleCopy(event, detail.requestPath)
-                          }
+                    ) : (
+                      '-'
+                    )}
+                  </span>
+                </div>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('分组')}</span>
+                  <span className='uldm-kv-value uldm-mono'>
+                    {detail.group}
+                  </span>
+                </div>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('令牌')}</span>
+                  <span className='uldm-kv-value uldm-mono'>
+                    {detail.tokenName}
+                  </span>
+                </div>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('调用模型')}</span>
+                  <span className='uldm-kv-value uldm-mono'>
+                    {detail.modelName}
+                    {detail.upstreamModelName && (
+                      <Tooltip
+                        content={`${t('实际模型')}：${detail.upstreamModelName}`}
+                      >
+                        <span
+                          className='uldm-accent'
+                          style={{ marginLeft: 6, fontSize: 11 }}
                         >
-                          <IconCopy size='small' />
-                        </button>
+                          → {detail.upstreamModelName}
+                        </span>
                       </Tooltip>
-                    </>
+                    )}
+                  </span>
+                </div>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('推理强度')}</span>
+                  <span
+                    className={`uldm-kv-value ${detail.reasoningEffort ? 'uldm-accent' : ''}`}
+                  >
+                    {detail.reasoningEffort || '-'}
+                  </span>
+                </div>
+                <div className='uldm-kv'>
+                  <span className='uldm-kv-label'>{t('响应时间')}</span>
+                  <span className='uldm-kv-value uldm-success uldm-mono'>
+                    {detail.useTime.toFixed(1)}s
+                    {detail.frtSeconds != null && (
+                      <small className='uldm-frt'>
+                        {' '}
+                        (FRT: {detail.frtSeconds}s)
+                      </small>
+                    )}
+                    {detail.speed > 0 && (
+                      <small className='uldm-frt'>
+                        {' '}
+                        · {detail.isStream ? t('流') : t('非流')} {detail.speed}{' '}
+                        t/s
+                      </small>
+                    )}
+                  </span>
+                </div>
+              </section>
+
+              {/* 消耗明细：输入 / 输出 / 缓存读取 / 总 Token 一行四项 */}
+              <section className='uldm-section'>
+                <div className='uldm-section-head'>
+                  <h3 className='uldm-section-title'>{t('消耗明细')}</h3>
+                  <div className='uldm-section-tools'>
+                    {detail.requestPath && (
+                      <>
+                        <span>{t('路径')}</span>
+                        <code className='uldm-path'>{detail.requestPath}</code>
+                        <Tooltip content={t('复制路径')}>
+                          <button
+                            className='uldm-copy-btn'
+                            aria-label={t('复制路径')}
+                            onClick={(event) =>
+                              handleCopy(event, detail.requestPath)
+                            }
+                          >
+                            <IconCopy size='small' />
+                          </button>
+                        </Tooltip>
+                      </>
+                    )}
+                    {detail.nativeContent && (
+                      <button
+                        className='uldm-link-btn'
+                        onClick={() => setNativeOpen((open) => !open)}
+                      >
+                        {t('原生格式')}
+                        {nativeOpen ? (
+                          <IconChevronDown size='small' />
+                        ) : (
+                          <IconChevronRight size='small' />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className='uldm-token-grid'>
+                  <div className='uldm-token-cell'>
+                    <span className='uldm-token-label'>{t('输入')}</span>
+                    <strong className='uldm-token-value'>
+                      {formatCount(tokens.input)}
+                    </strong>
+                  </div>
+                  <div className='uldm-token-cell'>
+                    <span className='uldm-token-label'>{t('输出')}</span>
+                    <strong className='uldm-token-value'>
+                      {formatCount(tokens.output)}
+                    </strong>
+                  </div>
+                  <div className='uldm-token-cell'>
+                    <span className='uldm-token-label'>
+                      {t('缓存读取')}{' '}
+                      <em className='uldm-hit-rate'>
+                        {(tokens.hitRate || 0).toFixed(2)}%
+                      </em>
+                    </span>
+                    <strong className='uldm-token-value'>
+                      {formatCount(tokens.cacheRead)}
+                    </strong>
+                  </div>
+                  <div className='uldm-token-cell'>
+                    <span className='uldm-token-label'>{t('总 Token')}</span>
+                    <strong className='uldm-token-value'>
+                      {formatCount(tokens.total)}
+                    </strong>
+                  </div>
+                </div>
+                {nativeOpen && detail.nativeContent && (
+                  <div className='uldm-process uldm-native'>
+                    {detail.nativeContent}
+                  </div>
+                )}
+              </section>
+
+              {/* 计费详情 */}
+              <section className='uldm-section'>
+                <div className='uldm-section-head'>
+                  <h3 className='uldm-section-title'>{t('计费详情')}</h3>
+                  {detail.billing && (
+                    <div className='uldm-billing-meta'>
+                      <span>
+                        {t('模式')}
+                        <strong>{detail.billing.modeLabel}</strong>
+                      </span>
+                      {detail.billing.tierLabel && (
+                        <span>
+                          {t('命中阶梯')}
+                          <strong>{detail.billing.tierLabel}</strong>
+                        </span>
+                      )}
+                    </div>
                   )}
-                  {detail.nativeContent && (
-                    <button
-                      className='uldm-link-btn'
-                      onClick={() => setNativeOpen((open) => !open)}
-                    >
-                      {t('原生格式')}
-                      {nativeOpen ? (
+                </div>
+                {detail.billing ? (
+                  <>
+                    {detail.billing.items.map((item, index) => {
+                      const formula = item.isPerRequest
+                        ? `1 × ${t('按次')} = ${item.amount}`
+                        : `${formatCount(item.tokens)} Token × ${t('{{price}}/1M Token', { price: item.unitPriceCompact })} = ${item.amount}`;
+                      return (
+                        <div className='uldm-billing-item' key={index}>
+                          <strong className='uldm-billing-label'>
+                            {item.label}
+                          </strong>
+                          <span className='uldm-formula'>{formula}</span>
+                          <strong className='uldm-amount'>{item.amount}</strong>
+                        </div>
+                      );
+                    })}
+                    <div className='uldm-billing-total'>
+                      <div className='uldm-subtotal'>
+                        <span className='uldm-total-label'>
+                          {t('分项合计')}
+                        </span>
+                        <strong className='uldm-total-equation'>
+                          {detail.billing.subtotalText}{' '}
+                          <span className='uldm-ratio'>
+                            × {detail.billing.multiplierText}
+                          </span>{' '}
+                          = {detail.billing.finalText}
+                        </strong>
+                        <span className='uldm-total-label'>
+                          {detail.billing.multiplierLabel}
+                        </span>
+                      </div>
+                      <div className='uldm-final'>
+                        <span className='uldm-total-label'>
+                          {t('最终扣费')}
+                        </span>
+                        <strong className='uldm-total-equation'>
+                          {detail.billing.finalText}
+                        </strong>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className='uldm-process'>
+                    {detail.violation ? (
+                      <div style={{ marginBottom: 8 }}>
+                        <span className='uldm-violation'>{t('违规扣费')}</span>
+                        <span className='uldm-mono' style={{ marginLeft: 8 }}>
+                          {t('扣费')}：{detail.violation.feeText}
+                        </span>
+                      </div>
+                    ) : null}
+                    {detail.billingProcess
+                      ? detail.billingProcess
+                      : detail.contentText || t('暂无计费过程数据')}
+                  </div>
+                )}
+              </section>
+
+              {/* 其他扩展信息：默认折叠，点击展开 */}
+              {detail.extraRows.length > 0 && (
+                <section className='uldm-section'>
+                  <button
+                    type='button'
+                    className='uldm-collapse-head'
+                    onClick={() => setExtrasOpen((open) => !open)}
+                  >
+                    <span className='uldm-section-title'>{t('扩展信息')}</span>
+                    <span className='uldm-collapse-meta'>
+                      {detail.extraRows.length}
+                      {extrasOpen ? (
                         <IconChevronDown size='small' />
                       ) : (
                         <IconChevronRight size='small' />
                       )}
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className='uldm-token-grid'>
-                <div className='uldm-token-cell'>
-                  <span className='uldm-token-label'>{t('输入')}</span>
-                  <strong className='uldm-token-value'>
-                    {formatCount(tokens.input)}
-                  </strong>
-                </div>
-                <div className='uldm-token-cell'>
-                  <span className='uldm-token-label'>{t('输出')}</span>
-                  <strong className='uldm-token-value'>
-                    {formatCount(tokens.output)}
-                  </strong>
-                </div>
-                <div className='uldm-token-cell'>
-                  <span className='uldm-token-label'>
-                    {t('缓存读取')}{' '}
-                    <em className='uldm-hit-rate'>
-                      {(tokens.hitRate || 0).toFixed(2)}%
-                    </em>
-                  </span>
-                  <strong className='uldm-token-value'>
-                    {formatCount(tokens.cacheRead)}
-                  </strong>
-                </div>
-                <div className='uldm-token-cell'>
-                  <span className='uldm-token-label'>{t('总 Token')}</span>
-                  <strong className='uldm-token-value'>
-                    {formatCount(tokens.total)}
-                  </strong>
-                </div>
-              </div>
-              {nativeOpen && detail.nativeContent && (
-                <div className='uldm-process uldm-native'>
-                  {detail.nativeContent}
-                </div>
-              )}
-            </section>
-
-            {/* 计费详情 */}
-            <section className='uldm-section'>
-              <div className='uldm-section-head'>
-                <h3 className='uldm-section-title'>{t('计费详情')}</h3>
-                {detail.billing && (
-                  <div className='uldm-billing-meta'>
-                    <span>
-                      {t('模式')}
-                      <strong>{detail.billing.modeLabel}</strong>
                     </span>
-                    {detail.billing.tierLabel && (
-                      <span>
-                        {t('命中阶梯')}
-                        <strong>{detail.billing.tierLabel}</strong>
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-              {detail.billing ? (
-                <>
-                  {detail.billing.items.map((item, index) => {
-                    const formula = item.isPerRequest
-                      ? `1 × ${t('按次')} = ${item.amount}`
-                      : `${formatCount(item.tokens)} Token × ${t('{{price}}/1M Token', { price: item.unitPriceCompact })} = ${item.amount}`;
-                    return (
-                      <div className='uldm-billing-item' key={index}>
-                        <strong className='uldm-billing-label'>
-                          {item.label}
-                        </strong>
-                        <span className='uldm-formula'>{formula}</span>
-                        <strong className='uldm-amount'>{item.amount}</strong>
-                      </div>
-                    );
-                  })}
-                  <div className='uldm-billing-total'>
-                    <div className='uldm-subtotal'>
-                      <span className='uldm-total-label'>{t('分项合计')}</span>
-                      <strong className='uldm-total-equation'>
-                        {detail.billing.subtotalText}{' '}
-                        <span className='uldm-ratio'>
-                          × {detail.billing.multiplierText}
-                        </span>{' '}
-                        = {detail.billing.finalText}
-                      </strong>
-                      <span className='uldm-total-label'>
-                        {detail.billing.multiplierLabel}
-                      </span>
+                  </button>
+                  {extrasOpen && (
+                    <div className='uldm-extras'>
+                      {detail.extraRows.map((row, index) => (
+                        <div
+                          className='uldm-extra-row'
+                          key={`${row.key}-${index}`}
+                        >
+                          <span className='uldm-extra-label'>{row.key}</span>
+                          <span className='uldm-extra-value'>{row.value}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div className='uldm-final'>
-                      <span className='uldm-total-label'>{t('最终扣费')}</span>
-                      <strong className='uldm-total-equation'>
-                        {detail.billing.finalText}
-                      </strong>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className='uldm-process'>
-                  {detail.violation ? (
-                    <div style={{ marginBottom: 8 }}>
-                      <span className='uldm-violation'>{t('违规扣费')}</span>
-                      <span className='uldm-mono' style={{ marginLeft: 8 }}>
-                        {t('扣费')}：{detail.violation.feeText}
-                      </span>
-                    </div>
-                  ) : null}
-                  {detail.billingProcess
-                    ? detail.billingProcess
-                    : detail.contentText || t('暂无计费过程数据')}
-                </div>
+                  )}
+                </section>
               )}
-            </section>
-
-            {/* 其他扩展信息：默认折叠，点击展开 */}
-            {detail.extraRows.length > 0 && (
-              <section className='uldm-section'>
-                <button
-                  type='button'
-                  className='uldm-collapse-head'
-                  onClick={() => setExtrasOpen((open) => !open)}
-                >
-                  <span className='uldm-section-title'>{t('扩展信息')}</span>
-                  <span className='uldm-collapse-meta'>
-                    {detail.extraRows.length}
-                    {extrasOpen ? (
-                      <IconChevronDown size='small' />
-                    ) : (
-                      <IconChevronRight size='small' />
-                    )}
-                  </span>
-                </button>
-                {extrasOpen && (
-                  <div className='uldm-extras'>
-                    {detail.extraRows.map((row, index) => (
-                      <div
-                        className='uldm-extra-row'
-                        key={`${row.key}-${index}`}
-                      >
-                        <span className='uldm-extra-label'>{row.key}</span>
-                        <span className='uldm-extra-value'>{row.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </Modal>

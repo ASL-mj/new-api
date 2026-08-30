@@ -4451,7 +4451,21 @@
     "费用": "Chi phí",
     "消耗明细": "Chi tiết tiêu hao",
     "列表展示顺序，数字越小越靠前；不影响调度优先级": "Thứ tự hiển thị trong danh sách kênh; số nhỏ hơn đứng trước. Không ảnh hưởng ưu tiên điều phối.",
+    "渠道展示排序": "Thứ tự hiển thị kênh",
     "阶梯": "Bậc",
+    "重置全部成功": "Đã đặt lại tất cả khóa",
+    "重置全部失败": "Đặt lại tất cả khóa thất bại",
+    "确定要重置当前渠道的全部密钥吗？": "Đặt lại tất cả khóa của kênh này?",
+    "将清零全部密钥的已用限额，并恢复自动禁用的密钥；手动禁用的密钥不会改变。": "Mức sử dụng giới hạn của tất cả khóa sẽ được xóa và các khóa tự động bị vô hiệu hóa sẽ được bật lại; các khóa bị vô hiệu hóa thủ công không thay đổi.",
+    "外部平台内联菜单": "Menu nền tảng bên ngoài nội tuyến",
+    "配置后将在站内以网页形式打开，可选择顶栏或现有侧边栏分组": "Các trang đã cấu hình sẽ mở trong trang web. Chọn thanh trên cùng hoặc một nhóm hiện có trên thanh bên.",
+    "新增菜单": "Thêm menu",
+    "菜单名称": "Tên menu",
+    "菜单描述": "Mô tả menu",
+    "自定义菜单": "Menu tùy chỉnh",
+    "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Nhập tên menu tùy chỉnh và URL http hoặc https hợp lệ.",
+    "确定删除这个自定义菜单吗？": "Xóa menu tùy chỉnh này?",
+    "外部平台地址未配置或不可用": "URL nền tảng bên ngoài chưa được cấu hình hoặc không khả dụng",
     "{{price}}/1M Token": "{{price}}/1M Token"
   }
 }
