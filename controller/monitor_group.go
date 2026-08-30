@@ -82,7 +82,7 @@ func GetMonitorGroups(c *gin.Context) {
 }
 
 func GetMonitorGroupChannelOptions(c *gin.Context) {
-	channels, err := model.GetAllChannels(0, 0, true, false)
+	channels, err := model.GetAllChannels(0, 0, true, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return

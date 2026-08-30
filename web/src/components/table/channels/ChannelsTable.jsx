@@ -66,13 +66,43 @@ const ChannelsTable = (channelsData) => {
     usageStats,
     usageStatsLoading,
     usageStatsError,
+    enableTagMode,
+    clientSort,
+    handleSortToggle,
+    idSort,
   } = channelsData;
+
+  // 客户端列排序（响应时间/今日消耗/限额/上游余额）：仅当前页、标签聚合模式下禁用
+  const sortedChannels = useMemo(() => {
+    if (!clientSort || enableTagMode) return channels;
+    const { key, dir } = clientSort;
+    const valueOf = (channel) => {
+      if (key === 'response_time') return Number(channel.response_time || 0);
+      const stat = usageStats[channel.id] || {};
+      if (key === 'today_quota') return Number(stat.today_quota || 0);
+      if (key === 'upstream_balance') return Number(stat.balance || 0);
+      if (key === 'quota_limit') {
+        if (stat.quota_limit_mode === 'key') {
+          return stat.key_quota_unlimited
+            ? Number.POSITIVE_INFINITY
+            : Number(stat.key_quota_limit || 0);
+        }
+        return Number(stat.quota_limit || 0);
+      }
+      return 0;
+    };
+    return [...channels].sort((a, b) =>
+      dir === 'asc' ? valueOf(a) - valueOf(b) : valueOf(b) - valueOf(a),
+    );
+  }, [channels, clientSort, usageStats, enableTagMode]);
 
   // Get all columns
   const allColumns = useMemo(() => {
     return getChannelsColumns({
       t,
       COLUMN_KEYS,
+      sortState: { idSort, clientSort },
+      onSortToggle: handleSortToggle,
       updateChannelBalance,
       manageChannel,
       manageTag,
@@ -100,6 +130,9 @@ const ChannelsTable = (channelsData) => {
   }, [
     t,
     COLUMN_KEYS,
+    idSort,
+    clientSort,
+    handleSortToggle,
     updateChannelBalance,
     manageChannel,
     manageTag,
@@ -143,7 +176,7 @@ const ChannelsTable = (channelsData) => {
   return (
     <CardTable
       columns={tableColumns}
-      dataSource={channels}
+      dataSource={sortedChannels}
       scroll={compactMode ? undefined : { x: 'max-content' }}
       pagination={{
         currentPage: activePage,

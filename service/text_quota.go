@@ -154,6 +154,38 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 	return tieredQuota + int(summary.ToolCallSurchargeQuota.Round(0).IntPart())
 }
 
+// standardChannelQuotaForText 计算渠道限额标准口径用量：
+// 与计费公式完全一致，但分组倍率（含用户专属倍率）固定按 1 处理。
+// 阶梯计费直接取 ActualQuotaBeforeGroup（表达式系数即真实单价，
+// BeforeGroup 为未乘分组倍率的额度）；工具调用附加费本身不受分组倍率影响。
+func standardChannelQuotaForText(
+	ctx *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	usage *dto.Usage,
+	summary textQuotaSummary,
+	tieredBillingApplied bool,
+	tieredResult *billingexpr.TieredResult,
+) int {
+	if relayInfo == nil {
+		return summary.Quota
+	}
+	if tieredBillingApplied && tieredResult != nil {
+		return int(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).
+			Add(summary.ToolCallSurchargeQuota).
+			Round(0).IntPart())
+	}
+	if relayInfo.PriceData.GroupRatioInfo.GroupRatio == 1 {
+		return summary.Quota
+	}
+
+	savedGroupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	relayInfo.PriceData.GroupRatioInfo.GroupRatio = 1
+	defer func() {
+		relayInfo.PriceData.GroupRatioInfo.GroupRatio = savedGroupRatio
+	}()
+	return calculateTextQuotaSummary(ctx, relayInfo, usage).Quota
+}
+
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
 	summary := textQuotaSummary{
 		ModelName:            relayInfo.OriginModelName,
@@ -365,7 +397,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
-		if err := RecordRelayChannelUsage(relayInfo, summary.Quota, int64(summary.TotalTokens), 1); err != nil {
+		standardQuota := standardChannelQuotaForText(ctx, relayInfo, usage, summary, tieredBillingApplied, tieredResult)
+		if err := RecordRelayChannelUsage(relayInfo, summary.Quota, standardQuota, int64(summary.TotalTokens), 1); err != nil {
 			logger.LogError(ctx, "error recording channel usage: "+err.Error())
 		}
 	}

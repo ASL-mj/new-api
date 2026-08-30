@@ -53,6 +53,18 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	return currentRatio != defaultRatio
 }
 
+// standardChannelQuotaForAudio 计算渠道限额标准口径用量：
+// 与音频/实时计费公式一致，但分组倍率固定按 1 处理；
+// 阶梯计费直接取 ActualQuotaBeforeGroup。
+func standardChannelQuotaForAudio(quotaInfo QuotaInfo, tieredOk bool, tieredResult *billingexpr.TieredResult) int {
+	if tieredOk && tieredResult != nil {
+		return int(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).Round(0).IntPart())
+	}
+	standardInfo := quotaInfo
+	standardInfo.GroupRatio = 1
+	return calculateAudioQuota(standardInfo)
+}
+
 func calculateAudioQuota(info QuotaInfo) int {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
@@ -209,6 +221,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if tieredOk {
 		quota = tieredQuota
 	}
+	standardQuota := standardChannelQuotaForAudio(quotaInfo, tieredOk, tieredResult)
 
 	totalTokens := usage.TotalTokens
 	var logContent string
@@ -229,7 +242,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
-		if err := RecordRelayChannelUsage(relayInfo, quota, int64(totalTokens), 1); err != nil {
+		if err := RecordRelayChannelUsage(relayInfo, quota, standardQuota, int64(totalTokens), 1); err != nil {
 			logger.LogError(ctx, "error recording channel usage: "+err.Error())
 		}
 	}
@@ -334,6 +347,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if tieredOk {
 		quota = tieredQuota
 	}
+	standardQuota := standardChannelQuotaForAudio(quotaInfo, tieredOk, tieredResult)
 
 	totalTokens := usage.TotalTokens
 	var logContent string
@@ -354,7 +368,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
-		if err := RecordRelayChannelUsage(relayInfo, quota, int64(totalTokens), 1); err != nil {
+		if err := RecordRelayChannelUsage(relayInfo, quota, standardQuota, int64(totalTokens), 1); err != nil {
 			logger.LogError(ctx, "error recording channel usage: "+err.Error())
 		}
 	}

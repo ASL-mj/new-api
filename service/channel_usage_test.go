@@ -382,7 +382,7 @@ func TestRecordRelayChannelUsageUsesRelayIdentity(t *testing.T) {
 		},
 	}
 
-	err := RecordRelayChannelUsage(relayInfo, 12, 18, 1)
+	err := RecordRelayChannelUsage(relayInfo, 12, 12, 18, 1)
 	require.NoError(t, err)
 
 	var keyUsage model.ChannelKeyUsage
@@ -516,4 +516,40 @@ func TestRecordChannelUsageBatchEnabledStillWritesDailyUsage(t *testing.T) {
 	usageDate := channelUsageDateForServiceTest(when)
 	summary := getChannelUsageDailyRow(t, channel.Id, "", usageDate)
 	assert.EqualValues(t, 17, summary.Quota)
+}
+
+func TestRecordChannelUsageStandardScope(t *testing.T) {
+	truncate(t)
+	seedChannelWithQuotaLimit(t, 60, 1000)
+	seedChannelWithQuotaLimit(t, 61, 1000)
+
+	// 场景：免费分组（计费为 0），标准口径 500 应真实累计到渠道，
+	// 使限额闸门按上游实际消耗计量，而不是被 0 倍率架空。
+	err := RecordChannelUsage(ChannelUsageRecordParams{
+		ChannelID:      60,
+		Quota:          0,
+		StandardQuota:  500,
+		TokenUsed:      1000,
+		RequestCount:   1,
+		HasKeyIdentity: false,
+	})
+	require.NoError(t, err)
+
+	channel := getChannelQuotaState(t, 60)
+	assert.EqualValues(t, 500, channel.QuotaLimitUsed, "限额应按标准口径累计")
+	assert.EqualValues(t, 500, channel.UsedQuota)
+
+	// 兼容回退：未传标准口径（0）时按计费口径累计（旧调用方行为不变）。
+	err = RecordChannelUsage(ChannelUsageRecordParams{
+		ChannelID:      61,
+		Quota:          300,
+		StandardQuota:  0,
+		TokenUsed:      100,
+		RequestCount:   1,
+		HasKeyIdentity: false,
+	})
+	require.NoError(t, err)
+
+	channel61 := getChannelQuotaState(t, 61)
+	assert.EqualValues(t, 300, channel61.QuotaLimitUsed)
 }

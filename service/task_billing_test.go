@@ -124,6 +124,19 @@ func seedChannel(t *testing.T, id int) {
 	require.NoError(t, model.DB.Create(ch).Error)
 }
 
+func seedChannelWithQuotaLimit(t *testing.T, id int, quotaLimit int64) {
+	t.Helper()
+	ch := &model.Channel{
+		Id:             id,
+		Name:           "test_channel_limited",
+		Key:            "sk-test",
+		Status:         common.ChannelStatusEnabled,
+		QuotaLimitMode: model.ChannelQuotaLimitModeChannel,
+		QuotaLimit:     quotaLimit,
+	}
+	require.NoError(t, model.DB.Create(ch).Error)
+}
+
 func makeTask(userId, channelId, quota, tokenId int, billingSource string, subscriptionId int) *model.Task {
 	return &model.Task{
 		TaskID:    "task_" + time.Now().Format("150405.000"),
@@ -437,7 +450,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "adaptor adjustment")
 
 	// User quota should decrease by the delta (1000 additional charge)
 	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
@@ -535,7 +548,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "adaptor adjustment")
 
 	// User quota should increase by abs(delta) = 2000 (refund overpayment)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -564,7 +577,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, preConsumed, "exact match")
+	RecalculateTaskQuota(ctx, task, preConsumed, 0, "exact match")
 
 	// No change to user quota
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
@@ -584,7 +597,7 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 
 	task := makeTask(userID, 0, 5000, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, 0, "zero actual")
+	RecalculateTaskQuota(ctx, task, 0, 0, "zero actual")
 
 	// No change (early return)
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
@@ -608,7 +621,7 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "subscription over-charge")
 
 	// Subscription used should decrease by delta (refund 3000)
 	assert.Equal(t, subUsed-int64(preConsumed-actualQuota), getSubscriptionUsed(t, subID))
@@ -650,7 +663,7 @@ func TestRecalculateTaskQuota_NegativeDeltaAdjustsFinalChannelQuota(t *testing.T
 	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-recalc-final-less", 0)
 	task.PrivateData.ChannelKeyIndex = 0
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "less than preconsume")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "less than preconsume")
 
 	reloaded := getChannelQuotaState(t, channelID)
 	assert.EqualValues(t, actualQuota, reloaded.UsedQuota)
@@ -695,7 +708,7 @@ func TestRecalculateTaskQuota_PositiveDeltaAdjustsFinalChannelQuota(t *testing.T
 	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-recalc-final-more", 0)
 	task.PrivateData.ChannelKeyIndex = 0
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "more than preconsume")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "more than preconsume")
 
 	reloaded := getChannelQuotaState(t, channelID)
 	assert.EqualValues(t, actualQuota, reloaded.UsedQuota)
@@ -745,7 +758,7 @@ func TestTaskBillingUsesPersistedFingerprintForMultiKeySettlement(t *testing.T) 
 	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-beta", 1)
 	task.PrivateData.ChannelKeyIndex = 1
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "settle on beta")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "settle on beta")
 
 	alphaUsage := getChannelKeyUsageByIndex(t, channelID, 0)
 	betaUsage := getChannelKeyUsageByIndex(t, channelID, 1)
@@ -836,7 +849,7 @@ func TestRecalculateTaskQuota_PositiveDeltaDisablesLastExhaustedKey(t *testing.T
 	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, "sk-final-exhaust", 0)
 	task.PrivateData.ChannelKeyIndex = 0
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "final quota exhausted key")
+	RecalculateTaskQuota(ctx, task, actualQuota, 0, "final quota exhausted key")
 
 	reloaded := getChannelQuotaState(t, channelID)
 	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
@@ -877,10 +890,10 @@ func TestRecalculateTaskQuota_NegativeDeltaReenablesKeyOnlyChannelAfterPositiveD
 	task.PrivateData.ChannelKeyFingerprint = applyTaskPreconsume(t, when, task, channel.Key, 0)
 	task.PrivateData.ChannelKeyIndex = 0
 
-	RecalculateTaskQuota(ctx, task, exhaustedQuota, "exhaust key after settlement")
+	RecalculateTaskQuota(ctx, task, exhaustedQuota, 0, "exhaust key after settlement")
 	assert.Equal(t, common.ChannelStatusAutoDisabled, getChannelQuotaState(t, channelID).Status)
 
-	RecalculateTaskQuota(ctx, task, preConsumed, "refund settlement delta")
+	RecalculateTaskQuota(ctx, task, preConsumed, 0, "refund settlement delta")
 
 	reloaded := getChannelQuotaState(t, channelID)
 	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
@@ -1024,7 +1037,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 	}
 
 	if shouldSettle && actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "test settle")
+		RecalculateTaskQuota(ctx, task, actualQuota, 0, "test settle")
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)

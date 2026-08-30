@@ -54,6 +54,19 @@ type OpenAIModelsResponse struct {
 
 var refreshCodexChannelCredential = service.RefreshCodexChannelCredential
 
+// parseChannelIdSort 解析渠道列表 id 排序参数：
+// "asc" → 升序；"desc"/"true"（历史布尔兼容）→ 降序；其余 → 默认展示排序。
+func parseChannelIdSort(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "asc", "1":
+		return "asc"
+	case "desc", "true":
+		return "desc"
+	default:
+		return ""
+	}
+}
+
 func parseStatusFilter(statusParam string) int {
 	switch strings.ToLower(statusParam) {
 	case "enabled", "1":
@@ -75,7 +88,7 @@ func clearChannelInfo(channel *model.Channel) {
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
-	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
+	idSort := parseChannelIdSort(c.Query("id_sort"))
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	statusParam := c.Query("status")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
@@ -135,11 +148,7 @@ func GetAllChannels(c *gin.Context) {
 
 		baseQuery.Count(&total)
 
-		// 与 model.GetAllChannels 保持一致：默认按手动展示排序，id_sort 时按 id 倒序
-		order := "sort_order asc, id asc"
-		if idSort {
-			order = "id desc"
-		}
+		order := model.ChannelDisplayOrder(idSort)
 
 		err := baseQuery.Order(order).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("key").Find(&channelData).Error
 		if err != nil {
@@ -256,7 +265,7 @@ func SearchChannels(c *gin.Context) {
 	modelKeyword := c.Query("model")
 	statusParam := c.Query("status")
 	statusFilter := parseStatusFilter(statusParam)
-	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
+	idSort := parseChannelIdSort(c.Query("id_sort"))
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	channelData := make([]*model.Channel, 0)
 	if enableTagMode {
@@ -1179,7 +1188,7 @@ func GetTagModels(c *gin.Context) {
 		return
 	}
 
-	channels, err := model.GetChannelsByTag(tag, false, false) // idSort=false, selectAll=false
+	channels, err := model.GetChannelsByTag(tag, "", false) // idSort=false, selectAll=false
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

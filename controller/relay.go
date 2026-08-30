@@ -662,10 +662,11 @@ func RelayTask(c *gin.Context) {
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
-		usageRecordedAt := service.LogTaskConsumption(c, relayInfo)
+		usageRecordedAt, channelStandardQuota := service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.ChannelUsageRecordedAt = usageRecordedAt.Unix()
+		task.PrivateData.ChannelStandardQuota = channelStandardQuota
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId

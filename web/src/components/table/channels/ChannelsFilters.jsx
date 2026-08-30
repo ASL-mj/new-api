@@ -29,13 +29,32 @@ const ChannelsFilters = ({
   formInitValues,
   setFormApi,
   searchChannels,
+  loadChannels,
+  getFormValues,
+  statusFilter,
+  setStatusFilter,
+  setActivePage,
+  pageSize,
+  idSort,
   enableTagMode,
+  activeTypeKey,
   formApi,
   groupOptions,
   loading,
   searching,
   t,
 }) => {
+  // 表单取值兜底（Form 未挂载时安全读取）
+  const getFormValuesSafe = () => {
+    if (getFormValues) return getFormValues();
+    const formValues = formApi ? formApi.getValues() : {};
+    return {
+      searchKeyword: formValues.searchKeyword || '',
+      searchGroup: formValues.searchGroup || '',
+      searchModel: '',
+    };
+  };
+
   return (
     <div className='flex flex-col md:flex-row justify-between items-center gap-2 w-full'>
       <div className='flex gap-2 w-full md:w-auto order-2 md:order-1'>
@@ -85,27 +104,17 @@ const ChannelsFilters = ({
           stopValidateWithError={false}
           className='flex flex-col md:flex-row items-center gap-2 w-full'
         >
-          <div className='relative w-full md:w-64'>
+          <div className='relative w-full md:w-72'>
             <Form.Input
               size='small'
               field='searchKeyword'
               prefix={<IconSearch />}
-              placeholder={t('渠道ID，名称，密钥，API地址')}
+              placeholder={t('渠道ID、名称、密钥、API地址、模型')}
               showClear
               pure
             />
           </div>
-          <div className='w-full md:w-48'>
-            <Form.Input
-              size='small'
-              field='searchModel'
-              prefix={<IconSearch />}
-              placeholder={t('模型关键字')}
-              showClear
-              pure
-            />
-          </div>
-          <div className='w-full md:w-32'>
+          <div className='w-full md:w-36'>
             <Form.Select
               size='small'
               field='searchGroup'
@@ -125,6 +134,53 @@ const ChannelsFilters = ({
               }}
             />
           </div>
+          <div className='w-full md:w-32'>
+            <Form.Select
+              size='small'
+              field='searchStatus'
+              placeholder={t('选择状态')}
+              optionList={[
+                { label: t('启用'), value: 'enabled' },
+                { label: t('禁用'), value: 'disabled' },
+              ]}
+              className='w-full'
+              showClear
+              pure
+              onChange={(value) => {
+                const next = value || 'all';
+                localStorage.setItem('channel-status-filter', next);
+                setStatusFilter(next);
+                setActivePage(1);
+                setTimeout(() => {
+                  const { searchKeyword, searchGroup, searchModel } =
+                    getFormValuesSafe();
+                  if (
+                    searchKeyword === '' &&
+                    searchGroup === '' &&
+                    searchModel === ''
+                  ) {
+                    loadChannels(
+                      1,
+                      pageSize,
+                      idSort,
+                      enableTagMode,
+                      activeTypeKey,
+                      next,
+                    );
+                  } else {
+                    searchChannels(
+                      enableTagMode,
+                      activeTypeKey,
+                      next,
+                      1,
+                      pageSize,
+                      idSort,
+                    );
+                  }
+                }, 0);
+              }}
+            />
+          </div>
           <Button
             size='small'
             type='tertiary'
@@ -140,6 +196,8 @@ const ChannelsFilters = ({
             onClick={() => {
               if (formApi) {
                 formApi.reset();
+                localStorage.setItem('channel-status-filter', 'all');
+                setStatusFilter('all');
                 // 重置后立即查询，使用setTimeout确保表单重置完成
                 setTimeout(() => {
                   refresh();

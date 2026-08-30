@@ -985,7 +985,7 @@ func convertModelsDevToRatioData(reader io.Reader) (map[string]any, error) {
 }
 
 func GetSyncableChannels(c *gin.Context) {
-	channels, err := model.GetAllChannels(0, 0, true, false)
+	channels, err := model.GetAllChannels(0, 0, true, "")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

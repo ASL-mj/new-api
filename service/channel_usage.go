@@ -19,32 +19,36 @@ type ChannelUsageRecordParams struct {
 	KeyIndex       int
 	HasKeyIdentity bool
 	Quota          int
-	TokenUsed      int64
-	RequestCount   int64
-	Now            time.Time
-	ModelName      string
-	Group          string
-	RequestID      string
+	// StandardQuota 渠道限额标准口径用量（不含分组倍率与用户侧优惠）；
+	// 未传（0）时结算层回退为 Quota。
+	StandardQuota int
+	TokenUsed     int64
+	RequestCount  int64
+	Now           time.Time
+	ModelName     string
+	Group         string
+	RequestID     string
 }
 
-func RecordRelayChannelUsage(relayInfo *relaycommon.RelayInfo, quota int, tokenUsed int64, requestCount int64) error {
-	return RecordRelayChannelUsageAt(relayInfo, quota, tokenUsed, requestCount, time.Time{})
+func RecordRelayChannelUsage(relayInfo *relaycommon.RelayInfo, quota int, standardQuota int, tokenUsed int64, requestCount int64) error {
+	return RecordRelayChannelUsageAt(relayInfo, quota, standardQuota, tokenUsed, requestCount, time.Time{})
 }
 
-func RecordRelayChannelUsageAt(relayInfo *relaycommon.RelayInfo, quota int, tokenUsed int64, requestCount int64, now time.Time) error {
+func RecordRelayChannelUsageAt(relayInfo *relaycommon.RelayInfo, quota int, standardQuota int, tokenUsed int64, requestCount int64, now time.Time) error {
 	if relayInfo == nil {
 		return nil
 	}
 
 	params := ChannelUsageRecordParams{
-		ChannelID:    relayInfo.ChannelId,
-		Quota:        quota,
-		TokenUsed:    tokenUsed,
-		RequestCount: requestCount,
-		ModelName:    relayInfo.OriginModelName,
-		Group:        relayInfo.UsingGroup,
-		RequestID:    relayInfo.RequestId,
-		Now:          now,
+		ChannelID:     relayInfo.ChannelId,
+		Quota:         quota,
+		StandardQuota: standardQuota,
+		TokenUsed:     tokenUsed,
+		RequestCount:  requestCount,
+		ModelName:     relayInfo.OriginModelName,
+		Group:         relayInfo.UsingGroup,
+		RequestID:     relayInfo.RequestId,
+		Now:           now,
 	}
 	if selectedKey, keyIndex, ok := relayInfo.GetChannelUsageIdentity(); ok {
 		params.SelectedKey = selectedKey
@@ -80,6 +84,7 @@ func RecordChannelUsage(params ChannelUsageRecordParams) error {
 		KeyIndex:       params.KeyIndex,
 		HasKeyIdentity: params.HasKeyIdentity && strings.TrimSpace(params.SelectedKey) != "",
 		Quota:          params.Quota,
+		StandardQuota:  params.StandardQuota,
 		TokenUsed:      params.TokenUsed,
 		RequestCount:   params.RequestCount,
 		Now:            params.Now,
@@ -114,9 +119,11 @@ type ChannelUsageDeltaRecordParams struct {
 	KeyIndex       int
 	HasKeyIdentity bool
 	QuotaDelta     int
-	TokenUsedDelta int64
-	RequestDelta   int64
-	Now            time.Time
+	// StandardQuotaDelta 标准口径用量差额（可为负）；未传（0）时回退为 QuotaDelta。
+	StandardQuotaDelta int64
+	TokenUsedDelta     int64
+	RequestDelta       int64
+	Now                time.Time
 }
 
 func RecordChannelUsageDelta(params ChannelUsageDeltaRecordParams) error {
@@ -131,14 +138,15 @@ func RecordChannelUsageDelta(params ChannelUsageDeltaRecordParams) error {
 	}
 
 	_, err := model.ApplyChannelUsageDelta(model.ChannelUsageDeltaParams{
-		ChannelID:      params.ChannelID,
-		KeyFingerprint: strings.TrimSpace(params.KeyFingerprint),
-		KeyIndex:       params.KeyIndex,
-		HasKeyIdentity: params.HasKeyIdentity && strings.TrimSpace(params.KeyFingerprint) != "",
-		QuotaDelta:     params.QuotaDelta,
-		TokenUsedDelta: params.TokenUsedDelta,
-		RequestDelta:   params.RequestDelta,
-		Now:            params.Now,
+		ChannelID:          params.ChannelID,
+		KeyFingerprint:     strings.TrimSpace(params.KeyFingerprint),
+		KeyIndex:           params.KeyIndex,
+		HasKeyIdentity:     params.HasKeyIdentity && strings.TrimSpace(params.KeyFingerprint) != "",
+		QuotaDelta:         params.QuotaDelta,
+		StandardQuotaDelta: params.StandardQuotaDelta,
+		TokenUsedDelta:     params.TokenUsedDelta,
+		RequestDelta:       params.RequestDelta,
+		Now:                params.Now,
 	})
 	return err
 }

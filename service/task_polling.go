@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -565,7 +566,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 
 	// Token 用量是独立统计维度，不能因按次计费或 adaptor 差额结算提前返回而丢失。
 	if taskResult.TotalTokens > 0 {
-		taskAdjustChannelUsage(ctx, task, 0, int64(taskResult.TotalTokens))
+		taskAdjustChannelUsage(ctx, task, 0, 0, int64(taskResult.TotalTokens))
 	}
 
 	// 0. 按次计费的任务不做差额结算
@@ -575,7 +576,11 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+		standardActualQuota := actualQuota
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.GroupRatio > 0 {
+			standardActualQuota = int(math.Round(float64(actualQuota) / bc.GroupRatio))
+		}
+		RecalculateTaskQuota(ctx, task, actualQuota, standardActualQuota, "adaptor计费调整")
 		return
 	}
 	// 2. 回退到 token 重算

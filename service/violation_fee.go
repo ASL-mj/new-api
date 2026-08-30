@@ -129,7 +129,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
-	if err := RecordRelayChannelUsage(relayInfo, feeQuota, 0, 0); err != nil {
+	if err := RecordRelayChannelUsage(relayInfo, feeQuota, feeQuota, 0, 0); err != nil {
 		logger.LogError(ctx, "error recording channel usage: "+err.Error())
 	}
 

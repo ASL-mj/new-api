@@ -42,13 +42,9 @@ const ChannelsActions = ({
   applyAllUpstreamUpdatesLoading,
   compactMode,
   setCompactMode,
-  idSort,
-  setIdSort,
   setEnableBatchDelete,
   enableTagMode,
   setEnableTagMode,
-  statusFilter,
-  setStatusFilter,
   getFormValues,
   loadChannels,
   searchChannels,
@@ -56,6 +52,7 @@ const ChannelsActions = ({
   activePage,
   pageSize,
   setActivePage,
+  idSort,
   t,
 }) => {
   return (
@@ -234,38 +231,6 @@ const ChannelsActions = ({
         <div className='flex flex-col md:flex-row items-start md:items-center gap-2 w-full md:w-auto order-1 md:order-2'>
           <div className='flex items-center justify-between w-full md:w-auto'>
             <Typography.Text strong className='mr-2'>
-              {t('使用ID排序')}
-            </Typography.Text>
-            <Switch
-              size='small'
-              checked={idSort}
-              onChange={(v) => {
-                localStorage.setItem('id-sort', v + '');
-                setIdSort(v);
-                const { searchKeyword, searchGroup, searchModel } =
-                  getFormValues();
-                if (
-                  searchKeyword === '' &&
-                  searchGroup === '' &&
-                  searchModel === ''
-                ) {
-                  loadChannels(activePage, pageSize, v, enableTagMode);
-                } else {
-                  searchChannels(
-                    enableTagMode,
-                    activeTypeKey,
-                    statusFilter,
-                    activePage,
-                    pageSize,
-                    v,
-                  );
-                }
-              }}
-            />
-          </div>
-
-          <div className='flex items-center justify-between w-full md:w-auto'>
-            <Typography.Text strong className='mr-2'>
               {t('开启批量操作')}
             </Typography.Text>
             <Switch
@@ -292,33 +257,6 @@ const ChannelsActions = ({
                 loadChannels(1, pageSize, idSort, v);
               }}
             />
-          </div>
-
-          <div className='flex items-center justify-between w-full md:w-auto'>
-            <Typography.Text strong className='mr-2'>
-              {t('状态筛选')}
-            </Typography.Text>
-            <Select
-              size='small'
-              value={statusFilter}
-              onChange={(v) => {
-                localStorage.setItem('channel-status-filter', v);
-                setStatusFilter(v);
-                setActivePage(1);
-                loadChannels(
-                  1,
-                  pageSize,
-                  idSort,
-                  enableTagMode,
-                  activeTypeKey,
-                  v,
-                );
-              }}
-            >
-              <Select.Option value='all'>{t('全部')}</Select.Option>
-              <Select.Option value='enabled'>{t('已启用')}</Select.Option>
-              <Select.Option value='disabled'>{t('已禁用')}</Select.Option>
-            </Select>
           </div>
         </div>
       </div>

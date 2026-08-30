@@ -417,15 +417,23 @@ func (channel *Channel) SaveWithoutKey() error {
 	return DB.Omit("key").Save(channel).Error
 }
 
-func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Channel, error) {
+// ChannelDisplayOrder 渠道列表排序：idSort 为 "asc"/"desc" 时按 id 升/降序，
+// 其余（含历史布尔兼容）按展示排序（sort_order 升序，未排序回退 id 升序）。
+func ChannelDisplayOrder(idSort string) string {
+	switch idSort {
+	case "asc":
+		return "id asc"
+	case "desc":
+		return "id desc"
+	default:
+		return "sort_order asc, id asc"
+	}
+}
+
+func GetAllChannels(startIdx int, num int, selectAll bool, idSort string) ([]*Channel, error) {
 	var channels []*Channel
 	var err error
-	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
-	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
-	order := "sort_order asc, id asc"
-	if idSort {
-		order = "id desc"
-	}
+	order := ChannelDisplayOrder(idSort)
 	if selectAll {
 		err = DB.Order(order).Find(&channels).Error
 	} else {
@@ -434,14 +442,11 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Chan
 	return channels, err
 }
 
-func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, error) {
+func GetChannelsByTag(tag string, idSort string, selectAll bool) ([]*Channel, error) {
 	var channels []*Channel
 	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
 	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
-	order := "sort_order asc, id asc"
-	if idSort {
-		order = "id desc"
-	}
+	order := ChannelDisplayOrder(idSort)
 	query := DB.Where("tag = ?", tag).Order(order)
 	if !selectAll {
 		query = query.Omit("key")
@@ -450,7 +455,7 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, erro
 	return channels, err
 }
 
-func SearchChannels(keyword string, group string, model string, idSort bool) ([]*Channel, error) {
+func SearchChannels(keyword string, group string, model string, idSort string) ([]*Channel, error) {
 	var channels []*Channel
 	modelsCol := "`models`"
 
@@ -467,10 +472,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 
 	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
 	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
-	order := "sort_order asc, id asc"
-	if idSort {
-		order = "id desc"
-	}
+	order := ChannelDisplayOrder(idSort)
 
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
@@ -488,6 +490,10 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 		}
 		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + ` LIKE ? AND ` + groupCondition
 		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%", "%,"+group+",%")
+	} else if model == "" {
+		// 合并搜索：单一关键字同时匹配 ID/名称/密钥/API 地址/模型
+		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ? OR " + modelsCol + " LIKE ?)"
+		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+keyword+"%")
 	} else {
 		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%")
@@ -1007,7 +1013,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		return err
 	}
 	if shouldReCreateAbilities {
-		channels, err := GetChannelsByTag(updatedTag, false, false)
+		channels, err := GetChannelsByTag(updatedTag, "", false)
 		if err == nil {
 			for _, channel := range channels {
 				err = channel.UpdateAbilities(nil)
@@ -1065,7 +1071,7 @@ func GetPaginatedTags(offset int, limit int) ([]*string, error) {
 	return tags, err
 }
 
-func SearchTags(keyword string, group string, model string, idSort bool) ([]*string, error) {
+func SearchTags(keyword string, group string, model string, idSort string) ([]*string, error) {
 	var tags []*string
 	modelsCol := "`models`"
 
@@ -1082,10 +1088,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 
 	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
 	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
-	order := "sort_order asc, id asc"
-	if idSort {
-		order = "id desc"
-	}
+	order := ChannelDisplayOrder(idSort)
 
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
@@ -1103,6 +1106,9 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 		}
 		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + ` LIKE ? AND ` + groupCondition
 		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%", "%,"+group+",%")
+	} else if model == "" {
+		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ? OR " + modelsCol + " LIKE ?)"
+		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+keyword+"%")
 	} else {
 		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%")
@@ -1255,14 +1261,11 @@ func CountAllTags() (int64, error) {
 }
 
 // Get channels of specified type with pagination
-func GetChannelsByType(startIdx int, num int, idSort bool, channelType int) ([]*Channel, error) {
+func GetChannelsByType(startIdx int, num int, idSort string, channelType int) ([]*Channel, error) {
 	var channels []*Channel
 	// 展示排序：默认按管理员手动排序（sort_order），未排序时回退到 id；
 	// idSort 时按 id 倒序。调度优先级与展示顺序无关。
-	order := "sort_order asc, id asc"
-	if idSort {
-		order = "id desc"
-	}
+	order := ChannelDisplayOrder(idSort)
 	err := DB.Where("type = ?", channelType).Order(order).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
 	return channels, err
 }

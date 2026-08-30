@@ -407,9 +407,13 @@ type ChannelUsageSettlementParams struct {
 	HasKeyIdentity bool
 	KeyFingerprint string
 	Quota          int
-	TokenUsed      int64
-	RequestCount   int64
-	Now            time.Time
+	// StandardQuota 渠道限额标准口径用量：按模型原始倍率折算，不含分组倍率
+	// 与任何用户侧优惠。渠道限额闸门与用量统计基于该值；
+	// 未传（0）时回退为 Quota，兼容既有调用方与历史行为。
+	StandardQuota int
+	TokenUsed     int64
+	RequestCount  int64
+	Now           time.Time
 }
 
 type ChannelUsageSettlementResult struct {
@@ -423,9 +427,12 @@ type ChannelUsageDeltaParams struct {
 	KeyIndex       int
 	HasKeyIdentity bool
 	QuotaDelta     int
-	TokenUsedDelta int64
-	RequestDelta   int64
-	Now            time.Time
+	// StandardQuotaDelta 标准口径用量差额（可为负，用于回冲）；
+	// 未传（0）时回退为 QuotaDelta。
+	StandardQuotaDelta int64
+	TokenUsedDelta     int64
+	RequestDelta       int64
+	Now                time.Time
 }
 
 func (usage ChannelKeyUsage) IsQuotaExceeded() bool {
@@ -1108,6 +1115,15 @@ func ApplyChannelUsageSettlement(params ChannelUsageSettlementParams) (ChannelUs
 	if params.Quota < 0 {
 		params.Quota = 0
 	}
+	// 渠道限额与用量统计按标准口径（不含分组倍率）累计；
+	// 调用方未传标准口径时回退为计费口径，保持旧行为。
+	if params.StandardQuota == 0 {
+		params.StandardQuota = params.Quota
+	}
+	if params.StandardQuota < 0 {
+		params.StandardQuota = 0
+	}
+	params.Quota = params.StandardQuota
 	if params.TokenUsed < 0 {
 		params.TokenUsed = 0
 	}
@@ -1176,6 +1192,11 @@ func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlem
 	if params.QuotaDelta == 0 && params.TokenUsedDelta == 0 && params.RequestDelta == 0 {
 		return result, nil
 	}
+	// 差额同样按标准口径累计；未传时回退为计费口径差额。
+	if params.StandardQuotaDelta == 0 {
+		params.StandardQuotaDelta = int64(params.QuotaDelta)
+	}
+	params.QuotaDelta = int(params.StandardQuotaDelta)
 	params.KeyFingerprint = strings.TrimSpace(params.KeyFingerprint)
 	params.HasKeyIdentity = params.HasKeyIdentity && params.KeyFingerprint != ""
 

@@ -127,7 +127,43 @@ export const useChannelsData = () => {
   const formInitValues = {
     searchKeyword: '',
     searchGroup: '',
-    searchModel: '',
+    searchStatus: statusFilter !== 'all' ? statusFilter : null,
+  };
+
+  // ===== 表头排序 =====
+  // idSort: ''（默认展示排序）/ 'asc' / 'desc'，走服务端；
+  // clientSort: 响应时间/今日消耗/限额/上游余额 的当前页排序。
+  const [clientSort, setClientSort] = useState(null);
+
+  const handleSortToggle = (key) => {
+    if (key === 'id') {
+      setClientSort(null);
+      const next = idSort === '' ? 'asc' : idSort === 'asc' ? 'desc' : '';
+      localStorage.setItem('id-sort', next);
+      setIdSort(next);
+      setActivePage(1);
+      const { searchKeyword, searchGroup, searchModel } = getFormValues();
+      if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
+        loadChannels(1, pageSize, next, enableTagMode);
+      } else {
+        searchChannels(
+          enableTagMode,
+          activeTypeKey,
+          statusFilter,
+          1,
+          pageSize,
+          next,
+        );
+      }
+      return;
+    }
+    setClientSort((prev) =>
+      prev && prev.key === key
+        ? prev.dir === 'asc'
+          ? { key, dir: 'desc' }
+          : null
+        : { key, dir: 'asc' },
+    );
   };
 
   // Column keys
@@ -148,7 +184,15 @@ export const useChannelsData = () => {
 
   // Initialize from localStorage
   useEffect(() => {
-    const localIdSort = localStorage.getItem('id-sort') === 'true';
+    const rawIdSort = localStorage.getItem('id-sort') || '';
+    const localIdSort =
+      rawIdSort === 'true'
+        ? 'desc'
+        : rawIdSort === 'asc'
+          ? 'asc'
+          : rawIdSort === 'desc'
+            ? 'desc'
+            : '';
     const localPageSize =
       parseInt(localStorage.getItem('page-size')) || ITEMS_PER_PAGE;
     const localEnableTagMode =
@@ -317,7 +361,7 @@ export const useChannelsData = () => {
     return {
       searchKeyword: formValues.searchKeyword || '',
       searchGroup: formValues.searchGroup || '',
-      searchModel: formValues.searchModel || '',
+      searchModel: '',
     };
   };
 
@@ -1257,6 +1301,10 @@ export const useChannelsData = () => {
     handleSelectAll,
     initDefaultColumns,
     getDefaultColumnVisibility,
+
+    // 表头排序
+    clientSort,
+    handleSortToggle,
 
     // Setters
     setIdSort,

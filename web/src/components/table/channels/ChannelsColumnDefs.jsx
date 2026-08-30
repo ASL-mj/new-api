@@ -50,6 +50,7 @@ import {
   IconAlertTriangle,
 } from '@douyinfe/semi-icons';
 import { FaRandom } from 'react-icons/fa';
+import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import {
   TodayAnd30dUsageCell,
   UpstreamBalanceCell,
@@ -309,9 +310,44 @@ const getUpstreamUpdateMeta = (record) => {
   };
 };
 
+// 表头三态排序指示器：无排序 ⇅ → 升序 ↑ → 降序 ↓
+function renderSortableHeader(label, sortKey, sortState, onSortToggle) {
+  const active =
+    sortState &&
+    (sortKey === 'id'
+      ? !!sortState.idSort
+      : !!(sortState.clientSort && sortState.clientSort.key === sortKey));
+  const dir = active
+    ? sortKey === 'id'
+      ? sortState.idSort
+      : sortState.clientSort.dir
+    : null;
+  const Icon =
+    dir === 'asc' ? ArrowUp : dir === 'desc' ? ArrowDown : ArrowUpDown;
+  return (
+    <div
+      className='flex items-center gap-1 cursor-pointer select-none'
+      onClick={(event) => {
+        event.stopPropagation();
+        onSortToggle && onSortToggle(sortKey);
+      }}
+    >
+      <span>{label}</span>
+      <Icon
+        size={12}
+        className={
+          active ? 'text-semi-color-primary' : 'text-semi-color-text-2'
+        }
+      />
+    </div>
+  );
+}
+
 export const getChannelsColumns = ({
   t,
   COLUMN_KEYS,
+  sortState,
+  onSortToggle,
   updateChannelBalance,
   manageChannel,
   manageTag,
@@ -339,7 +375,7 @@ export const getChannelsColumns = ({
   return [
     {
       key: COLUMN_KEYS.ID,
-      title: t('ID'),
+      title: renderSortableHeader(t('ID'), 'id', sortState, onSortToggle),
       dataIndex: 'id',
     },
     {
@@ -532,13 +568,23 @@ export const getChannelsColumns = ({
     },
     {
       key: COLUMN_KEYS.RESPONSE_TIME,
-      title: t('响应时间'),
+      title: renderSortableHeader(
+        t('响应时间'),
+        'response_time',
+        sortState,
+        onSortToggle,
+      ),
       dataIndex: 'response_time',
       render: (text, record, index) => <div>{renderResponseTime(text, t)}</div>,
     },
     {
       key: COLUMN_KEYS.TODAY_30D,
-      title: t('今日/30日'),
+      title: renderSortableHeader(
+        t('今日/30日'),
+        'today_quota',
+        sortState,
+        onSortToggle,
+      ),
       render: (_, record) => (
         <TodayAnd30dUsageCell
           record={record}
@@ -550,7 +596,12 @@ export const getChannelsColumns = ({
     },
     {
       key: COLUMN_KEYS.USED_LIMIT,
-      title: t('已用/限额'),
+      title: renderSortableHeader(
+        t('已用/限额'),
+        'quota_limit',
+        sortState,
+        onSortToggle,
+      ),
       render: (_, record) => (
         <UsedAndLimitCell
           record={record}
@@ -563,7 +614,12 @@ export const getChannelsColumns = ({
     },
     {
       key: COLUMN_KEYS.UPSTREAM_BALANCE,
-      title: t('上游余额'),
+      title: renderSortableHeader(
+        t('上游余额'),
+        'upstream_balance',
+        sortState,
+        onSortToggle,
+      ),
       render: (_, record) => (
         <UpstreamBalanceCell
           record={record}

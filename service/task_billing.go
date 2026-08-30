@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
-func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) time.Time {
+func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) (time.Time, int) {
 	usageRecordedAt := time.Now()
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
@@ -63,10 +64,26 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) time.Time {
 		Other:     other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	if err := RecordRelayChannelUsageAt(info, info.PriceData.Quota, 0, 1, usageRecordedAt); err != nil {
+	standardQuota := standardTaskQuotaEstimate(info)
+	if err := RecordRelayChannelUsageAt(info, info.PriceData.Quota, standardQuota, 0, 1, usageRecordedAt); err != nil {
 		logger.LogError(c, "error recording channel usage: "+err.Error())
 	}
-	return usageRecordedAt
+	return usageRecordedAt, standardQuota
+}
+
+// standardTaskQuotaEstimate 估算任务预扣的标准口径用量（不含分组倍率）。
+// 分组倍率 > 0 时按计费额反推；分组倍率为 0 且按次计费时取模型原始单价；
+// 其余情况（分组倍率为 0 且按倍率计费）预扣计费额本身为 0，记 0，
+// 任务完成按 token 重算时会补记标准口径差额。
+func standardTaskQuotaEstimate(info *relaycommon.RelayInfo) int {
+	groupRatio := info.PriceData.GroupRatioInfo.GroupRatio
+	if groupRatio > 0 {
+		return int(math.Round(float64(info.PriceData.Quota) / groupRatio))
+	}
+	if info.PriceData.UsePrice && info.PriceData.ModelPrice > 0 {
+		return int(math.Round(info.PriceData.ModelPrice * common.QuotaPerUnit))
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------------------
@@ -162,18 +179,19 @@ func taskChannelUsageTime(task *model.Task) time.Time {
 	return time.Now()
 }
 
-func taskAdjustChannelUsage(ctx context.Context, task *model.Task, quotaDelta int, tokenUsedDelta int64) {
-	if task == nil || task.ChannelId <= 0 || (quotaDelta == 0 && tokenUsedDelta == 0) {
+func taskAdjustChannelUsage(ctx context.Context, task *model.Task, quotaDelta int, standardQuotaDelta int, tokenUsedDelta int64) {
+	if task == nil || task.ChannelId <= 0 || (quotaDelta == 0 && standardQuotaDelta == 0 && tokenUsedDelta == 0) {
 		return
 	}
 	err := RecordChannelUsageDelta(ChannelUsageDeltaRecordParams{
-		ChannelID:      task.ChannelId,
-		KeyFingerprint: task.PrivateData.ChannelKeyFingerprint,
-		KeyIndex:       task.PrivateData.ChannelKeyIndex,
-		HasKeyIdentity: strings.TrimSpace(task.PrivateData.ChannelKeyFingerprint) != "",
-		QuotaDelta:     quotaDelta,
-		TokenUsedDelta: tokenUsedDelta,
-		Now:            taskChannelUsageTime(task),
+		ChannelID:          task.ChannelId,
+		KeyFingerprint:     task.PrivateData.ChannelKeyFingerprint,
+		KeyIndex:           task.PrivateData.ChannelKeyIndex,
+		HasKeyIdentity:     strings.TrimSpace(task.PrivateData.ChannelKeyFingerprint) != "",
+		QuotaDelta:         quotaDelta,
+		StandardQuotaDelta: int64(standardQuotaDelta),
+		TokenUsedDelta:     tokenUsedDelta,
+		Now:                taskChannelUsageTime(task),
 	})
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("adjust channel usage failed (task=%s, quota_delta=%d, token_delta=%d): %s", task.TaskID, quotaDelta, tokenUsedDelta, err.Error()))
@@ -198,7 +216,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	taskAdjustTokenQuota(ctx, task, -quota)
 
 	// 3. 回冲渠道、密钥和渠道日报中的预扣额度。请求次数保留为一次真实提交。
-	taskAdjustChannelUsage(ctx, task, -quota, 0)
+	taskAdjustChannelUsage(ctx, task, -quota, -task.PrivateData.ChannelStandardQuota, 0)
 
 	// 4. 记录日志
 	other := taskBillingOther(task)
@@ -220,14 +238,15 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 // RecalculateTaskQuota 通用的异步差额结算。
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string) {
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, standardActualQuota int, reason string) {
 	if actualQuota <= 0 {
 		return
 	}
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota
+	standardQuotaDelta := standardActualQuota - task.PrivateData.ChannelStandardQuota
 
-	if quotaDelta == 0 {
+	if quotaDelta == 0 && standardQuotaDelta == 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
 		return
@@ -251,7 +270,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
 
 	// 渠道账本按最终计费额度做相同的正负差额结算，Token 统计独立处理。
-	taskAdjustChannelUsage(ctx, task, quotaDelta, 0)
+	taskAdjustChannelUsage(ctx, task, quotaDelta, standardQuotaDelta, 0)
 
 	if err := task.UpdateQuota(actualQuota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("更新任务最终额度失败 task %s: %s", task.TaskID, err.Error()))
@@ -335,7 +354,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier
 	actualQuota := int(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
+	// 标准口径（不含分组倍率）：totalTokens * modelRatio * otherMultiplier
+	standardActualQuota := int(float64(totalTokens) * modelRatio * otherMultiplier)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
-	RecalculateTaskQuota(ctx, task, actualQuota, reason)
+	RecalculateTaskQuota(ctx, task, actualQuota, standardActualQuota, reason)
 }

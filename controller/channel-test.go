@@ -929,7 +929,7 @@ func testAllChannels(notify bool) error {
 	}
 	testAllChannelsRunning = true
 	testAllChannelsLock.Unlock()
-	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
+	channels, getChannelErr := model.GetAllChannels(0, 0, true, "")
 	if getChannelErr != nil {
 		return getChannelErr
 	}
