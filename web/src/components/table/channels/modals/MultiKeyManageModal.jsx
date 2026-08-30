@@ -166,6 +166,28 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     await loadKeyStatus(currentPage, pageSize);
   };
 
+  const handleResetAllKeys = async () => {
+    setOperationLoading((prev) => ({ ...prev, reset_all: true }));
+    try {
+      const res = await API.post('/api/channel/multi_key/manage', {
+        channel_id: channel.id,
+        action: 'reset_all_keys',
+      });
+      if (res.data.success) {
+        showSuccess(res.data.message || t('重置全部成功'));
+        setCurrentPage(1);
+        await loadKeyStatus(1, pageSize);
+        onRefresh && onRefresh();
+      } else {
+        showError(res.data.message || t('重置全部失败'));
+      }
+    } catch (error) {
+      showError(t('重置全部失败'));
+    } finally {
+      setOperationLoading((prev) => ({ ...prev, reset_all: false }));
+    }
+  };
+
   const handleEditKey = (record) => {
     setEditingKey(record);
     setShowKeyEditModal(true);
@@ -466,37 +488,6 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       render: (status) => renderStatusTag(status),
     },
     {
-      title: t('禁用原因'),
-      dataIndex: 'reason',
-      render: (reason, record) => {
-        if (record.status === 1 || !reason) {
-          return <Text type='quaternary'>-</Text>;
-        }
-        const localizedReason = localizeDisabledReason(reason);
-        return (
-          <Tooltip content={localizedReason}>
-            <Text style={{ maxWidth: '200px', display: 'block' }} ellipsis>
-              {localizedReason}
-            </Text>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: t('禁用时间'),
-      dataIndex: 'disabled_time',
-      render: (time, record) => {
-        if (record.status === 1 || !time) {
-          return <Text type='quaternary'>-</Text>;
-        }
-        return (
-          <Tooltip content={timestamp2string(time)}>
-            <Text style={{ fontSize: '12px' }}>{timestamp2string(time)}</Text>
-          </Tooltip>
-        );
-      },
-    },
-    {
       title: t('已用/限额'),
       key: 'quota',
       render: (_, record) => {
@@ -516,6 +507,37 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
               <Progress percent={percent} showInfo={false} size='small' />
             )}
           </div>
+        );
+      },
+    },
+    {
+      title: t('禁用时间'),
+      dataIndex: 'disabled_time',
+      render: (time, record) => {
+        if (record.status === 1 || !time) {
+          return <Text type='quaternary'>-</Text>;
+        }
+        return (
+          <Tooltip content={timestamp2string(time)}>
+            <Text style={{ fontSize: '12px' }}>{timestamp2string(time)}</Text>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: t('禁用原因'),
+      dataIndex: 'reason',
+      render: (reason, record) => {
+        if (record.status === 1 || !reason) {
+          return <Text type='quaternary'>-</Text>;
+        }
+        const localizedReason = localizeDisabledReason(reason);
+        return (
+          <Tooltip content={localizedReason}>
+            <Text style={{ maxWidth: '200px', display: 'block' }} ellipsis>
+              {localizedReason}
+            </Text>
+          </Tooltip>
         );
       },
     },
@@ -796,6 +818,23 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
                           >
                             {t('刷新')}
                           </Button>
+                          <Popconfirm
+                            title={t('确定要重置当前渠道的全部密钥吗？')}
+                            content={t(
+                              '将清零全部密钥的已用限额，并恢复自动禁用的密钥；手动禁用的密钥不会改变。',
+                            )}
+                            onConfirm={handleResetAllKeys}
+                            position='topRight'
+                          >
+                            <Button
+                              size='small'
+                              type='warning'
+                              theme='light'
+                              loading={operationLoading.reset_all}
+                            >
+                              {t('重置全部')}
+                            </Button>
+                          </Popconfirm>
                           {manualDisabledCount + autoDisabledCount > 0 && (
                             <Popconfirm
                               title={t('确定要启用所有密钥吗？')}

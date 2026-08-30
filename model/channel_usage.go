@@ -209,6 +209,96 @@ func ResetChannelKeyQuotaUsage(channelID int, fingerprint string, resetAt int64)
 	return nil
 }
 
+// ResetAllChannelKeyUsages clears current quota usage for every key on a channel.
+// Automatically disabled keys become enabled again; manually disabled keys keep
+// their state so an administrator's explicit decision is never overwritten.
+func ResetAllChannelKeyUsages(channel *Channel, resetAt int64) (int, error) {
+	if channel == nil {
+		return 0, errors.New("channel is nil")
+	}
+	if DB == nil {
+		return 0, errors.New("database not initialized")
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return 0, errors.New("channel is not multi-key")
+	}
+	if resetAt == 0 {
+		resetAt = common.GetTimestamp()
+	}
+
+	var updatedChannel Channel
+	resetCount := 0
+	parentStatusChanged := false
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&updatedChannel, channel.Id).Error; err != nil {
+			return err
+		}
+		if !updatedChannel.ChannelInfo.IsMultiKey {
+			return errors.New("channel is not multi-key")
+		}
+
+		currentUsages, err := ensureChannelKeyUsageRecords(tx, &updatedChannel)
+		if err != nil {
+			return err
+		}
+		for keyIndex, usage := range currentUsages {
+			if usage == nil {
+				continue
+			}
+			resetCount++
+			status := usage.Status
+			if mappedStatus, ok := updatedChannel.ChannelInfo.MultiKeyStatusList[keyIndex]; ok {
+				status = mappedStatus
+			}
+			updates := map[string]interface{}{
+				"quota_limit_used":     0,
+				"quota_limit_reset_at": resetAt,
+				"updated_at":           resetAt,
+			}
+			if status == common.ChannelStatusAutoDisabled {
+				updates["status"] = common.ChannelStatusEnabled
+				updates["disabled_reason"] = ""
+				updates["disabled_at"] = 0
+				delete(updatedChannel.ChannelInfo.MultiKeyStatusList, keyIndex)
+				delete(updatedChannel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
+				delete(updatedChannel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
+			}
+			if err := tx.Model(&ChannelKeyUsage{}).Where("id = ?", usage.Id).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+
+		normalizeChannelInfoStatusMaps(&updatedChannel.ChannelInfo)
+		beforeStatus := updatedChannel.Status
+		if updatedChannel.Status == common.ChannelStatusAutoDisabled && !updatedChannel.IsChannelQuotaExceeded() {
+			info := updatedChannel.GetOtherInfo()
+			reason, _ := info["status_reason"].(string)
+			if reason == ChannelKeyQuotaDisabledReason || reason == "All keys are disabled" {
+				if hasUsableChannelKeyTx(tx, updatedChannel.Id) {
+					updatedChannel.Status = common.ChannelStatusEnabled
+					delete(info, "status_reason")
+					delete(info, "status_time")
+					updatedChannel.SetOtherInfo(info)
+				}
+			}
+		}
+		parentStatusChanged = beforeStatus != updatedChannel.Status
+		return persistChannelQuotaStatusTx(tx, &updatedChannel)
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	if parentStatusChanged {
+		if err := UpdateAbilityStatus(updatedChannel.Id, updatedChannel.Status == common.ChannelStatusEnabled); err != nil {
+			common.SysLog(fmt.Sprintf("failed to update ability status after resetting channel keys: channel_id=%d, error=%v", updatedChannel.Id, err))
+		}
+		CacheUpdateChannelStatus(updatedChannel.Id, updatedChannel.Status)
+	}
+	CacheUpdateChannel(&updatedChannel)
+	return resetCount, nil
+}
+
 func UpdateChannelKeyQuotaLimit(channelID int, fingerprint string, quotaLimit int64) error {
 	if channelID <= 0 || strings.TrimSpace(fingerprint) == "" {
 		return errors.New("invalid channel key identity")

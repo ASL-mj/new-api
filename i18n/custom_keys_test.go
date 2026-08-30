@@ -46,6 +46,7 @@ func TestCustomMessagesExistInEveryBackendLocale(t *testing.T) {
 		MsgChannelKeysDeleted,
 		MsgChannelKeysNoAutoDisabledKeys,
 		MsgChannelKeysDeletedAutoCount,
+		MsgChannelKeysResetAllCount,
 		MsgChannelKeysUnsupportedAction,
 		MsgMonitorGroupCreated,
 		MsgMonitorGroupUpdated,

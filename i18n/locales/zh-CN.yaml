@@ -315,6 +315,7 @@ channel_keys.last_key_delete_forbidden: "不能删除最后一个密钥"
 channel_keys.deleted: "密钥已删除"
 channel_keys.no_auto_disabled_keys: "没有需要删除的自动禁用密钥"
 channel_keys.deleted_auto_count: "已删除 {{.Count}} 个自动禁用的密钥"
+channel_keys.reset_all_count: "已重置 {{.Count}} 个密钥的用量；自动禁用密钥已恢复，手动禁用密钥状态未改变"
 channel_keys.unsupported_action: "不支持的密钥操作"
 
 # 监控分组与公开状态消息

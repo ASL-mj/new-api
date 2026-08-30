@@ -314,6 +314,7 @@ channel_keys.last_key_delete_forbidden: "The last channel key cannot be deleted"
 channel_keys.deleted: "Channel key deleted"
 channel_keys.no_auto_disabled_keys: "There are no automatically disabled channel keys to delete"
 channel_keys.deleted_auto_count: "Deleted {{.Count}} automatically disabled channel keys"
+channel_keys.reset_all_count: "Reset usage for {{.Count}} keys; automatically disabled keys were enabled, while manually disabled key states were unchanged"
 channel_keys.unsupported_action: "Unsupported channel key operation"
 
 # Monitor group and public status messages

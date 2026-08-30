@@ -1071,6 +1071,66 @@ func TestSetChannelKeyStatusesDisablesParentAndPersistsKeyState(t *testing.T) {
 	}
 }
 
+func TestResetAllChannelKeyUsagesResetsAutoKeysAndPreservesManualKeys(t *testing.T) {
+	prepareChannelUsageTable(t)
+	configureChannelUsageSecret(t)
+
+	channel := &Channel{
+		Name:           "reset-all-key-usage",
+		Key:            "sk-alpha\nsk-beta",
+		Status:         common.ChannelStatusAutoDisabled,
+		Group:          "default",
+		Models:         "gpt-4o-mini",
+		QuotaLimitMode: ChannelQuotaLimitModeKey,
+		QuotaLimit:     100,
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:             true,
+			MultiKeySize:           2,
+			MultiKeyStatusList:     map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusManuallyDisabled},
+			MultiKeyDisabledReason: map[int]string{0: ChannelKeyQuotaDisabledReason, 1: "manually disabled"},
+			MultiKeyDisabledTime:   map[int]int64{0: 100, 1: 200},
+		},
+	}
+	channel.SetOtherInfo(map[string]interface{}{"status_reason": ChannelKeyQuotaDisabledReason})
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+	_, err := EnsureChannelKeyUsageRecords(channel)
+	require.NoError(t, err)
+
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("channel_id = ? AND key_index = ?", channel.Id, 0).
+		Updates(map[string]interface{}{
+			"quota_limit_used": 100,
+			"status":           common.ChannelStatusAutoDisabled,
+			"disabled_reason":  ChannelKeyQuotaDisabledReason,
+		}).Error)
+	require.NoError(t, DB.Model(&ChannelKeyUsage{}).
+		Where("channel_id = ? AND key_index = ?", channel.Id, 1).
+		Updates(map[string]interface{}{
+			"quota_limit_used": 60,
+			"status":           common.ChannelStatusManuallyDisabled,
+			"disabled_reason":  "manually disabled",
+		}).Error)
+
+	resetCount, err := ResetAllChannelKeyUsages(channel, 123456)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resetCount)
+
+	var usages []ChannelKeyUsage
+	require.NoError(t, DB.Where("channel_id = ?", channel.Id).Order("key_index ASC").Find(&usages).Error)
+	require.Len(t, usages, 2)
+	assert.EqualValues(t, 0, usages[0].QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusEnabled, usages[0].Status)
+	assert.EqualValues(t, 0, usages[1].QuotaLimitUsed)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, usages[1].Status)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	assert.NotContains(t, reloaded.ChannelInfo.MultiKeyStatusList, 0)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.ChannelInfo.MultiKeyStatusList[1])
+}
+
 func TestChannelUsageSQLHelpersAreDialectNeutral(t *testing.T) {
 	incrementSQL, incrementArgs := buildChannelQuotaLimitIncrementExpr(7)
 	disableSQL, disableArgs := buildChannelUsageAutoDisableCondition(123)

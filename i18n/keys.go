@@ -368,6 +368,7 @@ const (
 	MsgChannelKeysDeleted                 = "channel_keys.deleted"
 	MsgChannelKeysNoAutoDisabledKeys      = "channel_keys.no_auto_disabled_keys"
 	MsgChannelKeysDeletedAutoCount        = "channel_keys.deleted_auto_count"
+	MsgChannelKeysResetAllCount           = "channel_keys.reset_all_count"
 	MsgChannelKeysUnsupportedAction       = "channel_keys.unsupported_action"
 )
 

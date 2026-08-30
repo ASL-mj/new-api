@@ -1265,7 +1265,7 @@ func CopyChannel(c *gin.Context) {
 // MultiKeyManageRequest represents the request for multi-key management operations
 type MultiKeyManageRequest struct {
 	ChannelId int    `json:"channel_id"`
-	Action    string `json:"action"`              // "disable_key", "enable_key", "delete_key", "delete_disabled_keys", "get_key_status"
+	Action    string `json:"action"`              // "disable_key", "enable_key", "delete_key", "delete_disabled_keys", "reset_all_keys", "get_key_status"
 	KeyIndex  *int   `json:"key_index,omitempty"` // for disable_key, enable_key, and delete_key actions
 	Page      int    `json:"page,omitempty"`      // for get_key_status pagination
 	PageSize  int    `json:"page_size,omitempty"` // for get_key_status pagination
@@ -1522,6 +1522,16 @@ func ManageMultiKeys(c *gin.Context) {
 
 		model.InitChannelCache()
 		common.ApiSuccessI18n(c, i18n.MsgChannelKeysDisabledCount, nil, map[string]any{"Count": len(keyIndexes)})
+		return
+
+	case "reset_all_keys":
+		resetCount, resetErr := model.ResetAllChannelKeyUsages(channel, common.GetTimestamp())
+		if resetErr != nil {
+			common.ApiError(c, resetErr)
+			return
+		}
+		model.InitChannelCache()
+		common.ApiSuccessI18n(c, i18n.MsgChannelKeysResetAllCount, nil, map[string]any{"Count": resetCount})
 		return
 
 	case "delete_key":
