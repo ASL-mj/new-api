@@ -20,6 +20,21 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect, useMemo, useContext, useRef } from 'react';
 import { StatusContext } from '../../context/Status';
 import { API } from '../../helpers';
+import {
+  getCustomExternalMenuItems,
+  isSafeSidebarUrl,
+  isCustomMenuVisibleForUser,
+  normalizeSidebarCustomItems,
+  createDefaultUserConfig,
+} from '../../helpers/externalMenu';
+
+export {
+  getCustomExternalMenuItems,
+  isSafeSidebarUrl,
+  isCustomMenuVisibleForUser,
+  normalizeSidebarCustomItems,
+  createDefaultUserConfig,
+} from '../../helpers/externalMenu';
 
 // 创建一个全局事件系统来同步所有useSidebar实例
 const sidebarEventTarget = new EventTarget();
@@ -57,6 +72,7 @@ export const DEFAULT_ADMIN_CONFIG = {
     monitorGroups: true,
     ops: true,
   },
+  custom: [],
 };
 
 const deepClone = (value) => JSON.parse(JSON.stringify(value));
@@ -66,6 +82,7 @@ export const mergeAdminConfig = (savedConfig) => {
   if (!savedConfig || typeof savedConfig !== 'object') return merged;
 
   for (const [sectionKey, sectionConfig] of Object.entries(savedConfig)) {
+    if (sectionKey === 'custom') continue;
     if (!sectionConfig || typeof sectionConfig !== 'object') continue;
 
     if (!merged[sectionKey]) {
@@ -75,6 +92,8 @@ export const mergeAdminConfig = (savedConfig) => {
 
     merged[sectionKey] = { ...merged[sectionKey], ...sectionConfig };
   }
+
+  merged.custom = normalizeSidebarCustomItems(savedConfig.custom);
 
   return merged;
 };
@@ -125,41 +144,12 @@ export const useSidebar = () => {
         } else {
           config = res.data.data.sidebar_modules;
         }
-        setUserConfig(config);
+        setUserConfig({ ...config, custom: config.custom || {} });
       } else {
-        // 当用户没有配置时，生成一个基于管理员配置的默认用户配置
-        // 这样可以确保权限控制正确生效
-        const defaultUserConfig = {};
-        Object.keys(adminConfig).forEach((sectionKey) => {
-          if (adminConfig[sectionKey]?.enabled) {
-            defaultUserConfig[sectionKey] = { enabled: true };
-            // 为每个管理员允许的模块设置默认值为true
-            Object.keys(adminConfig[sectionKey]).forEach((moduleKey) => {
-              if (
-                moduleKey !== 'enabled' &&
-                adminConfig[sectionKey][moduleKey]
-              ) {
-                defaultUserConfig[sectionKey][moduleKey] = true;
-              }
-            });
-          }
-        });
-        setUserConfig(defaultUserConfig);
+        setUserConfig(createDefaultUserConfig(adminConfig));
       }
     } catch (error) {
-      // 出错时也生成默认配置，而不是设置为空对象
-      const defaultUserConfig = {};
-      Object.keys(adminConfig).forEach((sectionKey) => {
-        if (adminConfig[sectionKey]?.enabled) {
-          defaultUserConfig[sectionKey] = { enabled: true };
-          Object.keys(adminConfig[sectionKey]).forEach((moduleKey) => {
-            if (moduleKey !== 'enabled' && adminConfig[sectionKey][moduleKey]) {
-              defaultUserConfig[sectionKey][moduleKey] = true;
-            }
-          });
-        }
-      });
-      setUserConfig(defaultUserConfig);
+      setUserConfig(createDefaultUserConfig(adminConfig));
     } finally {
       if (shouldShowLoader) {
         setLoading(false);
@@ -230,6 +220,7 @@ export const useSidebar = () => {
 
     // 遍历所有区域
     Object.keys(adminConfig).forEach((sectionKey) => {
+      if (sectionKey === 'custom') return;
       const adminSection = adminConfig[sectionKey];
       const userSection = userConfig[sectionKey];
 
@@ -257,6 +248,16 @@ export const useSidebar = () => {
         result[sectionKey][moduleKey] =
           adminAllowed && userAllowed && sectionEnabled;
       });
+    });
+
+    result.custom = {};
+    normalizeSidebarCustomItems(adminConfig.custom).forEach((item) => {
+      if (!isCustomMenuVisibleForUser(item, userConfig.custom)) {
+        result.custom[item.id] = false;
+        return;
+      }
+
+      result.custom[item.id] = result[item.placement]?.enabled === true;
     });
 
     return result;

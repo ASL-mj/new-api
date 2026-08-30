@@ -50,6 +50,7 @@ import PersonalSetting from './components/settings/PersonalSetting';
 import GroupStatus from './pages/GroupStatus';
 import MonitorGroup from './pages/MonitorGroup';
 import Ops from './pages/Ops';
+import ExternalPage from './pages/External';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
 
@@ -108,6 +109,22 @@ function App() {
             <Suspense fallback={<Loading></Loading>} key={location.pathname}>
               <Docs />
             </Suspense>
+          }
+        />
+        <Route
+          path='/external/:id'
+          element={
+            <PrivateRoute>
+              <ExternalPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/external/:id'
+          element={
+            <PrivateRoute>
+              <ExternalPage />
+            </PrivateRoute>
           }
         />
         <Route

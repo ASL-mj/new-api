@@ -45,7 +45,9 @@ import { StatusContext } from '../../../../context/Status';
 import { UserContext } from '../../../../context/User';
 import { useUserPermissions } from '../../../../hooks/common/useUserPermissions';
 import {
+  isSafeSidebarUrl,
   mergeAdminConfig,
+  normalizeSidebarCustomItems,
   useSidebar,
 } from '../../../../hooks/common/useSidebar';
 
@@ -92,6 +94,7 @@ const NotificationSettings = ({
       user: true,
       setting: true,
     },
+    custom: {},
   });
   const [adminConfig, setAdminConfig] = useState(null);
 
@@ -132,6 +135,16 @@ const NotificationSettings = ({
       };
       setSidebarModulesUser(newModules);
     };
+  };
+
+  const handleCustomModuleChange = (customId) => (checked) => {
+    setSidebarModulesUser((current) => ({
+      ...current,
+      custom: {
+        ...(current.custom || {}),
+        [customId]: checked,
+      },
+    }));
   };
 
   const saveSidebarSettings = async () => {
@@ -176,6 +189,7 @@ const NotificationSettings = ({
         user: true,
         setting: true,
       },
+      custom: {},
     };
     setSidebarModulesUser(defaultConfig);
   };
@@ -207,7 +221,7 @@ const NotificationSettings = ({
           } else {
             userConf = userRes.data.data.sidebar_modules;
           }
-          setSidebarModulesUser(userConf);
+          setSidebarModulesUser({ ...userConf, custom: userConf.custom || {} });
         }
       } catch (error) {
         console.error('加载边栏配置失败:', error);
@@ -242,6 +256,28 @@ const NotificationSettings = ({
     }
   };
 
+  const customModulesByPlacement = ['chat', 'console', 'personal'].reduce(
+    (groups, placement) => {
+      groups[placement] = normalizeSidebarCustomItems(adminConfig?.custom)
+        .filter(
+          (item) =>
+            item.enabled &&
+            item.placement === placement &&
+            item.name &&
+            isSafeSidebarUrl(item.url),
+        )
+        .map((item) => ({
+          key: `custom:${item.id}`,
+          customId: item.id,
+          isCustom: true,
+          title: item.name,
+          description: item.description,
+        }));
+      return groups;
+    },
+    {},
+  );
+
   // 区域配置数据（根据权限过滤）
   const sectionConfigs = [
     {
@@ -255,7 +291,7 @@ const NotificationSettings = ({
           description: t('AI模型测试环境'),
         },
         { key: 'chat', title: t('聊天'), description: t('聊天会话管理') },
-      ],
+      ].concat(customModulesByPlacement.chat),
     },
     {
       key: 'console',
@@ -271,7 +307,7 @@ const NotificationSettings = ({
           description: t('绘图任务记录'),
         },
         { key: 'task', title: t('任务日志'), description: t('系统任务记录') },
-      ],
+      ].concat(customModulesByPlacement.console),
     },
     {
       key: 'personal',
@@ -284,7 +320,7 @@ const NotificationSettings = ({
           title: t('个人设置'),
           description: t('个人信息设置'),
         },
-      ],
+      ].concat(customModulesByPlacement.personal),
     },
     // 管理员区域：根据后端权限控制显示
     {
@@ -324,8 +360,9 @@ const NotificationSettings = ({
     })
     .map((section) => ({
       ...section,
-      modules: section.modules.filter((module) =>
-        isSidebarModuleAllowed(section.key, module.key),
+      modules: section.modules.filter(
+        (module) =>
+          module.isCustom || isSidebarModuleAllowed(section.key, module.key),
       ),
     }))
     .filter(
@@ -478,7 +515,10 @@ const NotificationSettings = ({
                     checkedText={t('开')}
                     uncheckedText={t('关')}
                     onChange={(value) =>
-                      handleFormChange('upstreamModelUpdateNotifyEnabled', value)
+                      handleFormChange(
+                        'upstreamModelUpdateNotifyEnabled',
+                        value,
+                      )
                     }
                     extraText={t(
                       '仅管理员可用。开启后，当系统定时检测全部渠道发现上游模型变更或检测异常时，将按你选择的通知方式发送汇总通知；渠道或模型过多时会自动省略部分明细。',
@@ -869,8 +909,10 @@ const NotificationSettings = ({
                         {/* 功能模块网格 */}
                         <Row gutter={[12, 12]}>
                           {section.modules
-                            .filter((module) =>
-                              isAllowedByAdmin(section.key, module.key),
+                            .filter(
+                              (module) =>
+                                module.isCustom ||
+                                isAllowedByAdmin(section.key, module.key),
                             )
                             .map((module) => (
                               <Col
@@ -913,14 +955,24 @@ const NotificationSettings = ({
                                     <div className='ml-4'>
                                       <Switch
                                         checked={
-                                          sidebarModulesUser[section.key]?.[
-                                            module.key
-                                          ] !== false
+                                          module.isCustom
+                                            ? sidebarModulesUser.custom?.[
+                                                module.customId
+                                              ] !== false
+                                            : sidebarModulesUser[section.key]?.[
+                                                module.key
+                                              ] !== false
                                         }
-                                        onChange={handleModuleChange(
-                                          section.key,
-                                          module.key,
-                                        )}
+                                        onChange={
+                                          module.isCustom
+                                            ? handleCustomModuleChange(
+                                                module.customId,
+                                              )
+                                            : handleModuleChange(
+                                                section.key,
+                                                module.key,
+                                              )
+                                        }
                                         size='default'
                                         disabled={
                                           sidebarModulesUser[section.key]

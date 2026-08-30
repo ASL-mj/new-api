@@ -57,6 +57,9 @@ const Navigation = ({
       if (link.itemKey === 'console' && !userState.user) {
         targetPath = '/login';
       }
+      if (link.requireAuth && !userState.user) {
+        targetPath = '/login';
+      }
       if (link.itemKey === 'pricing' && pricingRequireAuth && !userState.user) {
         targetPath = '/login';
       }

@@ -23,7 +23,10 @@ import { useTranslation } from 'react-i18next';
 import { getLucideIcon } from '../../helpers/render';
 import { ChevronLeft } from 'lucide-react';
 import { useSidebarCollapsed } from '../../hooks/common/useSidebarCollapsed';
-import { useSidebar } from '../../hooks/common/useSidebar';
+import {
+  getCustomExternalMenuItems,
+  useSidebar,
+} from '../../hooks/common/useSidebar';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { isAdmin, isRoot, showError } from '../../helpers';
 import SkeletonWrapper from './components/SkeletonWrapper';
@@ -60,6 +63,8 @@ const SiderBar = ({ onNavigate = () => {} }) => {
   const {
     isModuleVisible,
     hasSectionVisibleModules,
+    adminConfig,
+    finalConfig,
     loading: sidebarLoading,
   } = useSidebar();
 
@@ -220,6 +225,29 @@ const SiderBar = ({ onNavigate = () => {} }) => {
     return filteredItems;
   }, [isAdmin(), isRoot(), t, isModuleVisible]);
 
+  const customItemsByPlacement = useMemo(
+    () => ({
+      chat: getCustomExternalMenuItems(adminConfig, 'chat', finalConfig.custom),
+      console: getCustomExternalMenuItems(
+        adminConfig,
+        'console',
+        finalConfig.custom,
+      ),
+      personal: getCustomExternalMenuItems(
+        adminConfig,
+        'personal',
+        finalConfig.custom,
+      ),
+      admin: getCustomExternalMenuItems(adminConfig, 'admin'),
+    }),
+    [adminConfig, finalConfig.custom],
+  );
+
+  const customItems = useMemo(
+    () => Object.values(customItemsByPlacement).flat(),
+    [customItemsByPlacement],
+  );
+
   const chatMenuItems = useMemo(() => {
     const items = [
       {
@@ -240,8 +268,8 @@ const SiderBar = ({ onNavigate = () => {} }) => {
       return configVisible;
     });
 
-    return filteredItems;
-  }, [chatItems, t, isModuleVisible]);
+    return [...filteredItems, ...customItemsByPlacement.chat];
+  }, [chatItems, customItemsByPlacement.chat, t, isModuleVisible]);
 
   // 更新路由映射，添加聊天路由
   const updateRouterMapWithChats = (chats) => {
@@ -308,11 +336,17 @@ const SiderBar = ({ onNavigate = () => {} }) => {
       }
     }
 
+    if (!matchingKey) {
+      matchingKey = customItems.find(
+        (item) => item.to === currentPath,
+      )?.itemKey;
+    }
+
     // 如果找到匹配的键，更新选中的键
     if (matchingKey) {
       setSelectedKeys([matchingKey]);
     }
-  }, [location.pathname, routerMapState]);
+  }, [location.pathname, routerMapState, customItems]);
 
   // 监控折叠状态变化以更新 body class
   useEffect(() => {
@@ -348,7 +382,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         }
         icon={
           <div className='sidebar-icon-container flex-shrink-0'>
-            {getLucideIcon(item.itemKey, isSelected)}
+            {getLucideIcon(item.iconKey || item.itemKey, isSelected)}
           </div>
         }
         className={item.className}
@@ -430,8 +464,13 @@ const SiderBar = ({ onNavigate = () => {} }) => {
           hoverStyle='sidebar-nav-item:hover'
           selectedStyle='sidebar-nav-item-selected'
           renderWrapper={({ itemElement, props }) => {
+            const customItem = customItems.find(
+              (item) => item.itemKey === props.itemKey,
+            );
             const to =
-              routerMapState[props.itemKey] || routerMap[props.itemKey];
+              routerMapState[props.itemKey] ||
+              routerMap[props.itemKey] ||
+              customItem?.to;
 
             // 如果没有路由，直接返回元素
             if (!to) return itemElement;
@@ -460,7 +499,8 @@ const SiderBar = ({ onNavigate = () => {} }) => {
           }}
         >
           {/* 聊天区域 */}
-          {hasSectionVisibleModules('chat') && (
+          {(hasSectionVisibleModules('chat') ||
+            customItemsByPlacement.chat.length > 0) && (
             <div className='sidebar-section'>
               {!collapsed && (
                 <div className='sidebar-group-label'>{t('聊天')}</div>
@@ -470,43 +510,53 @@ const SiderBar = ({ onNavigate = () => {} }) => {
           )}
 
           {/* 控制台区域 */}
-          {hasSectionVisibleModules('console') && (
+          {(hasSectionVisibleModules('console') ||
+            customItemsByPlacement.console.length > 0) && (
             <>
               <Divider className='sidebar-divider' />
               <div>
                 {!collapsed && (
                   <div className='sidebar-group-label'>{t('控制台')}</div>
                 )}
-                {workspaceItems.map((item) => renderNavItem(item))}
+                {[...workspaceItems, ...customItemsByPlacement.console].map(
+                  (item) => renderNavItem(item),
+                )}
               </div>
             </>
           )}
 
           {/* 个人中心区域 */}
-          {hasSectionVisibleModules('personal') && (
+          {(hasSectionVisibleModules('personal') ||
+            customItemsByPlacement.personal.length > 0) && (
             <>
               <Divider className='sidebar-divider' />
               <div>
                 {!collapsed && (
                   <div className='sidebar-group-label'>{t('个人中心')}</div>
                 )}
-                {financeItems.map((item) => renderNavItem(item))}
+                {[...financeItems, ...customItemsByPlacement.personal].map(
+                  (item) => renderNavItem(item),
+                )}
               </div>
             </>
           )}
 
           {/* 管理员区域 - 只在管理员时显示且配置允许时显示 */}
-          {isAdmin() && hasSectionVisibleModules('admin') && (
-            <>
-              <Divider className='sidebar-divider' />
-              <div>
-                {!collapsed && (
-                  <div className='sidebar-group-label'>{t('管理员')}</div>
-                )}
-                {adminItems.map((item) => renderNavItem(item))}
-              </div>
-            </>
-          )}
+          {isAdmin() &&
+            (hasSectionVisibleModules('admin') ||
+              customItemsByPlacement.admin.length > 0) && (
+              <>
+                <Divider className='sidebar-divider' />
+                <div>
+                  {!collapsed && (
+                    <div className='sidebar-group-label'>{t('管理员')}</div>
+                  )}
+                  {[...adminItems, ...customItemsByPlacement.admin].map(
+                    (item) => renderNavItem(item),
+                  )}
+                </div>
+              </>
+            )}
         </Nav>
       </SkeletonWrapper>
 

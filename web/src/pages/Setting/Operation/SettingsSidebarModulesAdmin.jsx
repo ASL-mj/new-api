@@ -27,10 +27,16 @@ import {
   Row,
   Col,
   Typography,
+  Input,
+  Select,
+  Popconfirm,
 } from '@douyinfe/semi-ui';
 import { API, showSuccess, showError } from '../../../helpers';
 import { StatusContext } from '../../../context/Status';
-import { mergeAdminConfig } from '../../../hooks/common/useSidebar';
+import {
+  isSafeSidebarUrl,
+  mergeAdminConfig,
+} from '../../../hooks/common/useSidebar';
 
 const { Text } = Typography;
 
@@ -72,6 +78,38 @@ export default function SettingsSidebarModulesAdmin(props) {
     };
   }
 
+  function addCustomMenu() {
+    const nextItem = {
+      id: `custom-${Date.now()}`,
+      name: '',
+      description: '',
+      url: '',
+      enabled: true,
+      placement: 'console',
+      openMode: 'iframe',
+    };
+    setSidebarModulesAdmin((current) => ({
+      ...current,
+      custom: [...(current.custom || []), nextItem],
+    }));
+  }
+
+  function updateCustomMenu(id, field, value) {
+    setSidebarModulesAdmin((current) => ({
+      ...current,
+      custom: (current.custom || []).map((item) =>
+        item.id === id ? { ...item, [field]: value } : item,
+      ),
+    }));
+  }
+
+  function removeCustomMenu(id) {
+    setSidebarModulesAdmin((current) => ({
+      ...current,
+      custom: (current.custom || []).filter((item) => item.id !== id),
+    }));
+  }
+
   // 重置为默认配置
   function resetSidebarModules() {
     setSidebarModulesAdmin(mergeAdminConfig(null));
@@ -80,6 +118,14 @@ export default function SettingsSidebarModulesAdmin(props) {
 
   // 保存配置
   async function onSubmit() {
+    const customItems = sidebarModulesAdmin.custom || [];
+    const invalidItem = customItems.find(
+      (item) => !item.name.trim() || !isSafeSidebarUrl(item.url),
+    );
+    if (invalidItem) {
+      showError(t('请完善自定义菜单名称，并填写有效的 http 或 https 链接'));
+      return;
+    }
     setLoading(true);
     try {
       const res = await API.put('/api/option/', {
@@ -332,6 +378,94 @@ export default function SettingsSidebarModulesAdmin(props) {
             </Row>
           </div>
         ))}
+
+        <div
+          style={{
+            marginBottom: '32px',
+            padding: '16px',
+            border: '1px solid var(--semi-color-border)',
+            borderRadius: '8px',
+            backgroundColor: 'var(--semi-color-bg-1)',
+          }}
+        >
+          <div className='flex items-center justify-between mb-1'>
+            <div>
+              <div
+                style={{
+                  fontWeight: '600',
+                  fontSize: '16px',
+                  color: 'var(--semi-color-text-0)',
+                }}
+              >
+                {t('外部平台内联菜单')}
+              </div>
+              <Text type='secondary' size='small'>
+                {t('配置后将在站内以网页形式打开，可选择顶栏或现有侧边栏分组')}
+              </Text>
+            </div>
+            <Button type='primary' theme='light' onClick={addCustomMenu}>
+              {t('新增菜单')}
+            </Button>
+          </div>
+
+          {(sidebarModulesAdmin.custom || []).map((item) => (
+            <div
+              key={item.id}
+              className='flex flex-wrap items-center gap-2 py-3'
+              style={{ borderTop: '1px solid var(--semi-color-border)' }}
+            >
+              <Input
+                value={item.name}
+                placeholder={t('菜单名称')}
+                onChange={(value) => updateCustomMenu(item.id, 'name', value)}
+                style={{ flex: '1 1 160px' }}
+              />
+              <Input
+                value={item.description}
+                placeholder={t('菜单描述')}
+                onChange={(value) =>
+                  updateCustomMenu(item.id, 'description', value)
+                }
+                style={{ flex: '1 1 220px' }}
+              />
+              <Input
+                value={item.url}
+                placeholder='https://example.com'
+                onChange={(value) => updateCustomMenu(item.id, 'url', value)}
+                style={{ flex: '2 1 280px' }}
+              />
+              <Select
+                value={item.placement}
+                onChange={(value) =>
+                  updateCustomMenu(item.id, 'placement', value)
+                }
+                style={{ flex: '0 1 150px' }}
+              >
+                <Select.Option value='topbar'>{t('顶栏')}</Select.Option>
+                <Select.Option value='chat'>{t('聊天区域')}</Select.Option>
+                <Select.Option value='console'>{t('控制台区域')}</Select.Option>
+                <Select.Option value='personal'>
+                  {t('个人中心区域')}
+                </Select.Option>
+                <Select.Option value='admin'>{t('管理员区域')}</Select.Option>
+              </Select>
+              <Switch
+                checked={item.enabled}
+                onChange={(checked) =>
+                  updateCustomMenu(item.id, 'enabled', checked)
+                }
+              />
+              <Popconfirm
+                title={t('确定删除这个自定义菜单吗？')}
+                onConfirm={() => removeCustomMenu(item.id)}
+              >
+                <Button type='danger' theme='light'>
+                  {t('删除')}
+                </Button>
+              </Popconfirm>
+            </div>
+          ))}
+        </div>
 
         <div
           style={{

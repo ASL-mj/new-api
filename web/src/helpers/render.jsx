@@ -80,6 +80,7 @@ import {
   Activity,
   RadioTower,
   Gauge,
+  ExternalLink,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -156,6 +157,8 @@ export function getLucideIcon(key, selected = false) {
       return <RadioTower {...commonProps} color={iconColor} />;
     case 'ops':
       return <Gauge {...commonProps} color={iconColor} />;
+    case 'external':
+      return <ExternalLink {...commonProps} color={iconColor} />;
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
     default:

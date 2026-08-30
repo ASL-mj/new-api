@@ -17,10 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useHeaderBar } from '../../../hooks/common/useHeaderBar';
 import { useNotifications } from '../../../hooks/common/useNotifications';
 import { useNavigation } from '../../../hooks/common/useNavigation';
+import { getCustomExternalMenuItems } from '../../../hooks/common/useSidebar';
 import NoticeModal from '../NoticeModal';
 import MobileMenuButton from './MobileMenuButton';
 import HeaderLogo from './HeaderLogo';
@@ -63,6 +64,20 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
   } = useNotifications(statusState);
 
   const { mainNavLinks } = useNavigation(t, docsLink, headerNavModules);
+  const navigationLinks = useMemo(() => {
+    let customConfig = null;
+    try {
+      customConfig = JSON.parse(
+        statusState?.status?.SidebarModulesAdmin || '{}',
+      );
+    } catch {
+      customConfig = null;
+    }
+    return [
+      ...mainNavLinks,
+      ...getCustomExternalMenuItems(customConfig, 'topbar'),
+    ];
+  }, [mainNavLinks, statusState?.status?.SidebarModulesAdmin]);
 
   return (
     <header className='text-semi-color-text-0 sticky top-0 z-50 transition-colors duration-300 bg-white/75 dark:bg-zinc-900/75 backdrop-blur-lg'>
@@ -100,7 +115,7 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
           </div>
 
           <Navigation
-            mainNavLinks={mainNavLinks}
+            mainNavLinks={navigationLinks}
             isMobile={isMobile}
             isLoading={isLoading}
             userState={userState}
