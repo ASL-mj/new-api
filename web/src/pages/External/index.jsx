@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useMemo } from 'react';
 import { Empty, Spin } from '@douyinfe/semi-ui';
+import { ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useParams } from 'react-router-dom';
 import { StatusContext } from '../../context/Status';
@@ -68,7 +69,16 @@ const External = () => {
   }
 
   return (
-    <div className={contentClassName}>
+    <div className={`${contentClassName} relative`}>
+      {/* 部分站点会通过 X-Frame-Options / CSP 拒绝被 iframe 嵌入，提供新窗口打开兜底 */}
+      <button
+        type='button'
+        className='absolute right-4 top-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-semi-color-border bg-semi-color-bg-0 px-3 py-1.5 text-xs font-medium text-semi-color-text-0 shadow-sm transition-colors hover:bg-semi-color-fill-0'
+        onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')}
+      >
+        <ExternalLink size={14} />
+        {t('新窗口打开')}
+      </button>
       <iframe
         src={item.url}
         title={item.name}

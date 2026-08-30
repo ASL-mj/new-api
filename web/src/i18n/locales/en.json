@@ -4086,6 +4086,7 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Enter a custom menu name and a valid http or https URL.",
     "确定删除这个自定义菜单吗？": "Delete this custom menu?",
     "外部平台地址未配置或不可用": "The external platform URL is missing or unavailable",
-    "{{price}}/1M Token": "{{price}}/1M Token"
+    "{{price}}/1M Token": "{{price}}/1M Token",
+    "新窗口打开": "Open in new window"
   }
 }

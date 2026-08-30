@@ -3943,6 +3943,7 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Saisissez un nom de menu et une URL http ou https valide.",
     "确定删除这个自定义菜单吗？": "Supprimer ce menu personnalisé ?",
     "外部平台地址未配置或不可用": "L'URL de la plateforme externe est absente ou indisponible",
-    "{{price}}/1M Token": "{{price}}/1M Token"
+    "{{price}}/1M Token": "{{price}}/1M Token",
+    "新窗口打开": "Ouvrir dans une nouvelle fenêtre"
   }
 }

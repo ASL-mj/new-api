@@ -4466,6 +4466,7 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Nhập tên menu tùy chỉnh và URL http hoặc https hợp lệ.",
     "确定删除这个自定义菜单吗？": "Xóa menu tùy chỉnh này?",
     "外部平台地址未配置或不可用": "URL nền tảng bên ngoài chưa được cấu hình hoặc không khả dụng",
-    "{{price}}/1M Token": "{{price}}/1M Token"
+    "{{price}}/1M Token": "{{price}}/1M Token",
+    "新窗口打开": "Mở trong cửa sổ mới"
   }
 }
