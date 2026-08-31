@@ -14,6 +14,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// DownstreamWritable reports whether it is still safe to write to the client.
+// Stream handlers continue parsing upstream data after a client disconnect so
+// that final usage can be settled, but must not write to the closed response.
+func DownstreamWritable(c *gin.Context) bool {
+	return c != nil && c.Writer != nil && (c.Request == nil || c.Request.Context().Err() == nil)
+}
+
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -21,12 +28,8 @@ func FlushWriter(c *gin.Context) (err error) {
 		}
 	}()
 
-	if c == nil || c.Writer == nil {
+	if !DownstreamWritable(c) {
 		return nil
-	}
-
-	if c.Request != nil && c.Request.Context().Err() != nil {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
 	flusher, ok := c.Writer.(http.Flusher)
@@ -55,6 +58,9 @@ func SetEventStreamHeaders(c *gin.Context) {
 }
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
+	if !DownstreamWritable(c) {
+		return nil
+	}
 	jsonData, err := common.Marshal(resp)
 	if err != nil {
 		common.SysError("error marshalling stream response: " + err.Error())
@@ -67,12 +73,18 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
+	if !DownstreamWritable(c) {
+		return
+	}
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
 	_ = FlushWriter(c)
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) {
+	if !DownstreamWritable(c) {
+		return
+	}
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
 	_ = FlushWriter(c)
@@ -83,8 +95,8 @@ func StringData(c *gin.Context, str string) error {
 		return errors.New("context or writer is nil")
 	}
 
-	if c.Request != nil && c.Request.Context().Err() != nil {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	if !DownstreamWritable(c) {
+		return nil
 	}
 
 	c.Render(-1, common.CustomEvent{Data: "data: " + str})
@@ -96,8 +108,8 @@ func PingData(c *gin.Context) error {
 		return errors.New("context or writer is nil")
 	}
 
-	if c.Request != nil && c.Request.Context().Err() != nil {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	if !DownstreamWritable(c) {
+		return nil
 	}
 
 	if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {

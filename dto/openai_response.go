@@ -242,6 +242,13 @@ type Usage struct {
 	Cost any `json:"cost,omitempty"`
 }
 
+const (
+	// UsageSourceEstimatedClientGone marks a streamed response that reached the
+	// upstream but ended before it returned final usage. Prompt tokens are a
+	// local estimate for audit only and must not be billed.
+	UsageSourceEstimatedClientGone = "estimated_client_gone"
+)
+
 type OpenAIVideoResponse struct {
 	Id        string `json:"id" example:"file-abc123"`
 	Object    string `json:"object" example:"file"`

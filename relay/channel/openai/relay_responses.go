@@ -144,6 +144,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
 
+	// If the bounded drain still ends without final upstream usage, preserve the
+	// existing audit fallback. The normal client-gone path now waits for
+	// response.completed and therefore reaches exact usage settlement here.
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 &&
+		info != nil && info.StreamStatus != nil &&
+		info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone &&
+		info.ReceivedResponseCount > 0 && info.GetEstimatePromptTokens() > 0 {
+		usage.PromptTokens = info.GetEstimatePromptTokens()
+		usage.UsageSource = dto.UsageSourceEstimatedClientGone
+	}
+
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil

@@ -102,6 +102,12 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		"status":     status,
 		"end_reason": string(ss.EndReason),
 	}
+	if ss.IsDownstreamDisconnected() {
+		streamInfo["downstream_disconnected"] = true
+		if ss.IsNormalEnd() {
+			streamInfo["settled_after_downstream_disconnect"] = true
+		}
+	}
 	if ss.EndError != nil {
 		streamInfo["end_error"] = ss.EndError.Error()
 	}
