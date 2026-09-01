@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -175,4 +176,90 @@ func TestOaiResponsesStreamHandler_ClientGoneSettlesInputOnlyFinalUsage(t *testi
 	case <-time.After(2 * time.Second):
 		t.Fatal("stream handler did not drain the upstream response")
 	}
+}
+
+func TestOaiResponsesStreamHandler_ClientGoneWithoutFinalUsageKeepsAuditEstimate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Writer = &signalResponseWriter{ResponseWriter: c.Writer, wrote: make(chan struct{})}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "test-model",
+		},
+	}
+	info.SetEstimatePromptTokens(21520)
+
+	result := make(chan *dto.Usage, 1)
+	go func() {
+		usage, _ := OaiResponsesStreamHandler(c, info, &http.Response{Body: reader})
+		result <- usage
+	}()
+
+	_, err := fmt.Fprint(writer, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_without_usage\"}}\n")
+	require.NoError(t, err)
+	select {
+	case <-c.Writer.(*signalResponseWriter).wrote:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the first downstream SSE event")
+	}
+
+	cancel()
+	require.Eventually(t, func() bool {
+		return info.StreamStatus != nil && info.StreamStatus.IsDownstreamDisconnected()
+	}, time.Second, 10*time.Millisecond)
+
+	_, err = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n")
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	select {
+	case usage := <-result:
+		require.Equal(t, 21520, usage.PromptTokens)
+		require.Greater(t, usage.CompletionTokens, 0)
+		require.Equal(t, dto.UsageSourceEstimatedClientGone, usage.UsageSource)
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream handler did not finish after upstream EOF")
+	}
+}
+
+func TestOaiResponsesStreamHandler_PreservesFinalZeroOutputUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+
+	reader := strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_zero_output\",\"usage\":{\"input_tokens\":21520,\"output_tokens\":0,\"total_tokens\":21520}}}\ndata: [DONE]\n")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.5",
+		},
+	}
+
+	usage, err := OaiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(reader)})
+	require.Nil(t, err)
+	require.Equal(t, 21520, usage.PromptTokens)
+	require.Zero(t, usage.CompletionTokens)
+	require.Equal(t, 21520, usage.TotalTokens)
 }

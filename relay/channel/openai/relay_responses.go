@@ -78,6 +78,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var receivedFinalUsage bool
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -93,15 +94,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.completed":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
-					if streamResponse.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					}
-					if streamResponse.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					}
-					if streamResponse.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					}
+					receivedFinalUsage = true
+					usage.PromptTokens = streamResponse.Response.Usage.InputTokens
+					usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
+					usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
 					}
@@ -130,7 +126,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
-	if usage.CompletionTokens == 0 {
+	if !receivedFinalUsage && usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
 		tempStr := responseTextBuilder.String()
 		if len(tempStr) > 0 {
@@ -140,18 +136,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	}
 
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
+	if !receivedFinalUsage && usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
 
-	// If the bounded drain still ends without final upstream usage, preserve the
-	// existing audit fallback. The normal client-gone path now waits for
-	// response.completed and therefore reaches exact usage settlement here.
-	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 &&
-		info != nil && info.StreamStatus != nil &&
-		info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone &&
-		info.ReceivedResponseCount > 0 && info.GetEstimatePromptTokens() > 0 {
-		usage.PromptTokens = info.GetEstimatePromptTokens()
+	// A disconnected client may leave before the upstream sends its final usage.
+	// Keep local estimates for audit visibility, but never settle quota from
+	// incomplete usage because it cannot be reconciled with the upstream bill.
+	if !receivedFinalUsage && info != nil && info.StreamStatus != nil && info.StreamStatus.IsDownstreamDisconnected() {
+		if usage.PromptTokens == 0 && info.ReceivedResponseCount > 0 {
+			usage.PromptTokens = info.GetEstimatePromptTokens()
+		}
 		usage.UsageSource = dto.UsageSourceEstimatedClientGone
 	}
 
