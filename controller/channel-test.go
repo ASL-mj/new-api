@@ -42,6 +42,9 @@ type testResult struct {
 	context     *gin.Context
 	localErr    error
 	newAPIError *types.NewAPIError
+	usage       *dto.Usage
+	relayInfo   *relaycommon.RelayInfo
+	request     dto.Request
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -81,6 +84,7 @@ func testChannelWithOptions(channel *model.Channel, testModel string, endpointTy
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Set(common.RequestIdKey, "channel-test-"+common.GetUUID())
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
@@ -244,15 +248,15 @@ func testChannelWithOptions(channel *model.Channel, testModel string, endpointTy
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
 
-	if recordLog {
-		err = attachTestBillingRequestInput(info, request)
-		if err != nil {
+	if err = attachTestBillingRequestInput(info, request); err != nil {
+		if recordLog {
 			return testResult{
 				context:     c,
 				localErr:    err,
 				newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
 			}
 		}
+		common.SysError(fmt.Sprintf("failed to attach channel probe billing input: %v", err))
 	}
 
 	err = helper.ModelMappedHelper(c, info, request)
@@ -518,6 +522,9 @@ func testChannelWithOptions(channel *model.Channel, testModel string, endpointTy
 		context:     c,
 		localErr:    nil,
 		newAPIError: nil,
+		usage:       usage,
+		relayInfo:   info,
+		request:     request,
 	}
 }
 
@@ -536,6 +543,7 @@ func probeChannel(channel *model.Channel, modelName string, timeout time.Duratio
 		LatencyMs: time.Since(startedAt).Milliseconds(),
 	}
 	if probeResult.Success {
+		recordMonitorProbeUsageLog(channel, modelName, result, probeResult)
 		return probeResult
 	}
 	if errors.Is(result.localErr, context.DeadlineExceeded) || errors.Is(result.newAPIError, context.DeadlineExceeded) {
@@ -551,7 +559,76 @@ func probeChannel(channel *model.Channel, modelName string, timeout time.Duratio
 	} else if result.localErr != nil {
 		probeResult.Message = common.MaskSensitiveInfo(result.localErr.Error())
 	}
+	recordMonitorProbeUsageLog(channel, modelName, result, probeResult)
 	return probeResult
+}
+
+func recordMonitorProbeUsageLog(channel *model.Channel, requestedModel string, result testResult, probeResult channelProbeResult) {
+	if channel == nil {
+		return
+	}
+
+	params := model.RecordSystemUsageLogParams{
+		ChannelId:      channel.Id,
+		ModelName:      requestedModel,
+		TokenName:      "渠道探测",
+		Content:        "渠道探测成功",
+		UseTimeSeconds: int(math.Ceil(float64(probeResult.LatencyMs) / 1000)),
+		Group:          "default",
+		Other: map[string]interface{}{
+			"monitor_probe": true,
+			"probe_status":  "success",
+			"billing_scope": "standard",
+		},
+	}
+	if result.context != nil {
+		params.RequestId = result.context.GetString(common.RequestIdKey)
+		if result.context.Request != nil && result.context.Request.URL != nil {
+			params.Other["request_path"] = result.context.Request.URL.Path
+		}
+	}
+	if result.relayInfo != nil {
+		if result.relayInfo.OriginModelName != "" {
+			params.ModelName = result.relayInfo.OriginModelName
+		}
+		if result.relayInfo.UsingGroup != "" {
+			params.Group = result.relayInfo.UsingGroup
+		}
+		params.IsStream = result.relayInfo.IsStream
+	}
+
+	if !probeResult.Success {
+		params.Content = "渠道探测失败"
+		params.Other["probe_status"] = "failed"
+		params.Other["error_code"] = probeResult.ErrorCode
+		params.Other["error_message"] = common.MaskSensitiveInfo(probeResult.Message)
+		if result.newAPIError != nil {
+			params.Other["status_code"] = result.newAPIError.StatusCode
+			params.Other["error_type"] = result.newAPIError.GetErrorType()
+		}
+	}
+
+	if result.usage != nil {
+		params.PromptTokens = result.usage.PromptTokens
+		params.CompletionTokens = result.usage.CompletionTokens
+	}
+	if result.usage != nil && result.relayInfo != nil && result.request != nil && result.context != nil {
+		priceData, err := helper.ModelPriceHelper(result.context, result.relayInfo, 0, result.request.GetTokenCountMeta())
+		if err != nil {
+			params.Other["billing_error"] = common.MaskSensitiveInfo(err.Error())
+		} else {
+			quota, tieredResult := settleTestQuota(result.relayInfo, priceData, result.usage)
+			params.Quota = quota
+			params.Other = buildTestLogOther(result.context, result.relayInfo, priceData, result.usage, tieredResult)
+			params.Other["monitor_probe"] = true
+			params.Other["probe_status"] = "success"
+			params.Other["billing_scope"] = "standard"
+		}
+	}
+
+	if err := model.RecordSystemUsageLog(params); err != nil {
+		common.SysError(fmt.Sprintf("failed to record channel probe usage: channel_id=%d, error=%v", channel.Id, err))
+	}
 }
 
 func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Request) error {

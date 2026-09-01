@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   buildUsageLogDetail,
   buildUsageLogBriefSummary,
+  isMonitorProbeLog,
   isAdminQuotaAdjustmentLog,
 } from './usageLogDetailAdapter';
 
@@ -265,5 +266,79 @@ describe('usage log detail adapter', () => {
 
     const errorLog = { ...baseLog, type: 5 };
     expect(buildUsageLogBriefSummary(errorLog, identityT)).toBe('错误详情');
+  });
+
+  test('adapts channel probe logs into request-like columns and details', () => {
+    const record = {
+      ...baseLog,
+      id: 202,
+      type: 4,
+      channel: 20,
+      model_name: 'gpt-5.6-terra',
+      token_name: '渠道探测',
+      group: 'default',
+      request_id: 'channel-test-202',
+      prompt_tokens: 7,
+      completion_tokens: 13,
+      use_time: 2,
+      quota: 128,
+      content: '渠道探测成功',
+      other: JSON.stringify({
+        monitor_probe: true,
+        probe_status: 'success',
+        billing_scope: 'standard',
+        request_path: '/v1/responses',
+      }),
+    };
+    expect(isMonitorProbeLog(record)).toBe(true);
+    const detail = buildUsageLogDetail({
+      record,
+      expandRows: [],
+      t: identityT,
+    });
+    expect(detail.typeLabel).toBe('探测');
+    expect(detail.requestId).toBe('channel-test-202');
+    expect(detail.modelName).toBe('gpt-5.6-terra');
+    expect(detail.tokens.input).toBe(7);
+    expect(detail.tokens.output).toBe(13);
+    expect(detail.probe).toMatchObject({
+      success: true,
+      status: 'success',
+      billingScope: 'standard',
+    });
+    expect(buildUsageLogBriefSummary(record, identityT)).toBe(
+      '探测成功 · 20 Token',
+    );
+  });
+
+  test('preserves failed channel probe diagnostics', () => {
+    const record = {
+      ...baseLog,
+      type: 4,
+      content: '渠道探测失败',
+      other: JSON.stringify({
+        monitor_probe: true,
+        probe_status: 'failed',
+        status_code: 502,
+        error_code: 'bad_response',
+        error_type: 'upstream_error',
+        error_message: 'upstream unavailable',
+      }),
+    };
+    const detail = buildUsageLogDetail({
+      record,
+      expandRows: [],
+      t: identityT,
+    });
+    expect(detail.probe).toMatchObject({
+      success: false,
+      statusCode: 502,
+      errorCode: 'bad_response',
+      errorType: 'upstream_error',
+      errorMessage: 'upstream unavailable',
+    });
+    expect(buildUsageLogBriefSummary(record, identityT)).toBe(
+      '探测失败 · bad_response',
+    );
   });
 });

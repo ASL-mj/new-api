@@ -50,7 +50,7 @@ import {
   IconAlertTriangle,
 } from '@douyinfe/semi-icons';
 import { FaRandom } from 'react-icons/fa';
-import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Info } from 'lucide-react';
 import {
   TodayAnd30dUsageCell,
   UpstreamBalanceCell,
@@ -372,6 +372,17 @@ export const getChannelsColumns = ({
   usageStatsLoading,
   usageStatsError,
 }) => {
+  const quotaScopeTooltip = t(
+    '统计按标准口径累计，不受分组倍率和用户侧优惠影响',
+  );
+  const quotaHeader = (label, sortKey) => (
+    <div className='flex items-center gap-1'>
+      {renderSortableHeader(label, sortKey, sortState, onSortToggle)}
+      <Tooltip content={quotaScopeTooltip}>
+        <Info size={13} className='text-semi-color-text-2' />
+      </Tooltip>
+    </div>
+  );
   return [
     {
       key: COLUMN_KEYS.ID,
@@ -579,12 +590,7 @@ export const getChannelsColumns = ({
     },
     {
       key: COLUMN_KEYS.TODAY_30D,
-      title: renderSortableHeader(
-        t('今日/30日'),
-        'today_quota',
-        sortState,
-        onSortToggle,
-      ),
+      title: quotaHeader(t('今日/30日'), 'today_quota'),
       render: (_, record) => (
         <TodayAnd30dUsageCell
           record={record}
@@ -596,12 +602,7 @@ export const getChannelsColumns = ({
     },
     {
       key: COLUMN_KEYS.USED_LIMIT,
-      title: renderSortableHeader(
-        t('已用/限额'),
-        'quota_limit',
-        sortState,
-        onSortToggle,
-      ),
+      title: quotaHeader(t('已用/限额'), 'quota_limit'),
       render: (_, record) => (
         <UsedAndLimitCell
           record={record}

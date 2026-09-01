@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Tag, Space, Skeleton, Tooltip } from '@douyinfe/semi-ui';
+import { Tag, Space, Skeleton, Tooltip, Switch } from '@douyinfe/semi-ui';
 import { renderQuota, renderNumber } from '../../../helpers';
 import CompactModeToggle from '../../common/ui/CompactModeToggle';
 import { useMinimumLoadingTime } from '../../../hooks/common/useMinimumLoadingTime';
@@ -29,6 +29,8 @@ const LogsActions = ({
   showStat,
   compactMode,
   setCompactMode,
+  autoRefresh,
+  setAutoRefresh,
   t,
 }) => {
   const showSkeleton = useMinimumLoadingTime(loadingStat);
@@ -103,11 +105,26 @@ const LogsActions = ({
         </Space>
       </Skeleton>
 
-      <CompactModeToggle
-        compactMode={compactMode}
-        setCompactMode={setCompactMode}
-        t={t}
-      />
+      <Space>
+        <Tooltip content={t('每 3 秒自动刷新使用日志')}>
+          <Space spacing={6}>
+            <Switch
+              size='small'
+              checked={autoRefresh}
+              onChange={setAutoRefresh}
+              aria-label={t('自动刷新')}
+            />
+            <span className='text-xs text-semi-color-text-2'>
+              {t('自动刷新')}
+            </span>
+          </Space>
+        </Tooltip>
+        <CompactModeToggle
+          compactMode={compactMode}
+          setCompactMode={setCompactMode}
+          t={t}
+        />
+      </Space>
     </div>
   );
 };

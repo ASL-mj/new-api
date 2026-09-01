@@ -209,6 +209,49 @@ const UsageLogDetailModal = ({
                 </div>
               </section>
 
+              {detail.probe && (
+                <section className='uldm-section'>
+                  <div className='uldm-section-head'>
+                    <h3 className='uldm-section-title'>{t('探测结果')}</h3>
+                    <strong
+                      className={
+                        detail.probe.success ? 'uldm-success' : 'uldm-error'
+                      }
+                    >
+                      {detail.probe.success
+                        ? `✓ ${t('成功')}`
+                        : `✗ ${t('失败')}`}
+                    </strong>
+                  </div>
+                  <div className='grid grid-cols-2 gap-3 p-3 sm:grid-cols-4'>
+                    {[
+                      [t('HTTP 状态码'), detail.probe.statusCode],
+                      [t('错误码'), detail.probe.errorCode],
+                      [t('错误类型'), detail.probe.errorType],
+                      [
+                        t('标准口径'),
+                        detail.probe.billingScope ? t('是') : '-',
+                      ],
+                    ].map(([label, value]) => (
+                      <div key={label} className='min-w-0'>
+                        <span className='uldm-kv-label'>{label}</span>
+                        <div className='mt-1 break-words text-sm'>
+                          {value ?? '-'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {detail.probe.errorMessage && (
+                    <div className='border-t p-3'>
+                      <span className='uldm-kv-label'>{t('错误信息')}</span>
+                      <div className='mt-1 whitespace-pre-wrap break-words text-sm'>
+                        {detail.probe.errorMessage}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+
               {/* 消耗明细：输入 / 输出 / 缓存读取 / 总 Token 一行四项 */}
               <section className='uldm-section'>
                 <div className='uldm-section-head'>

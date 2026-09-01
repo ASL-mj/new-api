@@ -254,17 +254,16 @@ func TestGetOpsDetailsPaginatesNewestFirstAndIncludesChannelName(t *testing.T) {
 	prepareMonitorRunnerTables(t)
 	channel := &model.Channel{Name: "Detail Channel", Key: "secret", Type: 1}
 	require.NoError(t, model.DB.Create(channel).Error)
-	for _, bucket := range []int64{120, 180} {
-		require.NoError(t, model.UpsertOpsMetrics(model.OpsMetricBucket{
-			BucketTs: bucket, ModelName: "gpt-5.4", Group: "default",
-			ChannelId: channel.Id, ChannelType: channel.Type,
-			RequestCount: 2, SuccessCount: 1, TtftSumMs: 40, TtftCount: 1,
-		}, nil))
+	for _, createdAt := range []int64{120, 180} {
+		require.NoError(t, model.LOG_DB.Create(&model.Log{
+			CreatedAt: createdAt, Type: model.LogTypeConsume, ModelName: "gpt-5.4", Group: "default",
+			ChannelId: channel.Id, RequestId: "request-" + stringInt(createdAt), UseTime: 1,
+		}).Error)
 	}
 
 	response := performOpsRequest(
 		t,
-		"/api/ops/details?metric=ttft&start_timestamp=60&end_timestamp=240&p=1&page_size=1",
+		"/api/ops/details?metric=requests&start_timestamp=60&end_timestamp=240&p=1&page_size=1",
 		GetOpsDetails,
 	)
 	data := response["data"].(map[string]any)
@@ -273,7 +272,8 @@ func TestGetOpsDetailsPaginatesNewestFirstAndIncludesChannelName(t *testing.T) {
 	items := page["items"].([]any)
 	require.Len(t, items, 1)
 	row := items[0].(map[string]any)
-	assert.EqualValues(t, 180, row["bucket_ts"])
+	assert.EqualValues(t, 180, row["created_at"])
+	assert.Equal(t, "request-180", row["request_id"])
 	assert.Equal(t, "Detail Channel", row["channel_name"])
 
 	recorder := performMonitorGroupRequest(
@@ -285,6 +285,56 @@ func TestGetOpsDetailsPaginatesNewestFirstAndIncludesChannelName(t *testing.T) {
 	)
 	invalid := decodeMonitorGroupResponse(t, recorder)
 	assert.False(t, invalid["success"].(bool))
+}
+
+func TestGetOpsDetailsRequestIdIgnoresDashboardTimeWindow(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	channel := &model.Channel{Name: "Linked Alert Channel", Key: "secret", Type: 1}
+	require.NoError(t, model.DB.Create(channel).Error)
+	require.NoError(t, model.LOG_DB.Create(&model.Log{
+		CreatedAt: 100, Type: model.LogTypeError, ModelName: "gpt-5.4", Group: "default",
+		ChannelId: channel.Id, RequestId: "alert-linked-request", Content: "upstream failed",
+		Other: common.MapToJsonStr(map[string]interface{}{"status_code": 502, "error_code": "do_request_failed"}),
+	}).Error)
+
+	response := performOpsRequest(
+		t,
+		"/api/ops/details?metric=requests&request_id=alert-linked-request&start_timestamp=200&end_timestamp=240",
+		GetOpsDetails,
+	)
+	page := response["data"].(map[string]any)["page"].(map[string]any)
+	assert.EqualValues(t, 1, page["total"])
+	row := page["items"].([]any)[0].(map[string]any)
+	assert.Equal(t, "alert-linked-request", row["request_id"])
+	assert.Equal(t, "upstream", row["error_class"])
+}
+
+func TestGetOpsDetailsAppliesMetricFiltersToRawRequests(t *testing.T) {
+	prepareMonitorRunnerTables(t)
+	channel := &model.Channel{Name: "Metrics Channel", Key: "secret", Type: 1}
+	require.NoError(t, model.DB.Create(channel).Error)
+	logs := []*model.Log{
+		{CreatedAt: 100, Type: model.LogTypeConsume, ModelName: "gpt-5.4", Group: "default", ChannelId: channel.Id, RequestId: "success", UseTime: 1, Other: common.MapToJsonStr(map[string]interface{}{"frt": 100})},
+		{CreatedAt: 110, Type: model.LogTypeConsume, ModelName: "gpt-5.4", Group: "default", ChannelId: channel.Id, RequestId: "slow", UseTime: 9, Other: common.MapToJsonStr(map[string]interface{}{"frt": 900})},
+		{CreatedAt: 120, Type: model.LogTypeError, ModelName: "gpt-5.4", Group: "default", ChannelId: channel.Id, RequestId: "limited", Content: "quota exhausted", Other: common.MapToJsonStr(map[string]interface{}{"status_code": 403, "error_code": "insufficient_user_quota"})},
+		{CreatedAt: 130, Type: model.LogTypeError, ModelName: "gpt-5.4", Group: "default", ChannelId: channel.Id, RequestId: "upstream", Content: "upstream failed", Other: common.MapToJsonStr(map[string]interface{}{"status_code": 502, "error_code": "do_request_failed"})},
+	}
+	for _, log := range logs {
+		require.NoError(t, model.LOG_DB.Create(log).Error)
+	}
+
+	assertMetricTotal := func(metric string, expected int) {
+		t.Helper()
+		response := performOpsRequest(t, "/api/ops/details?metric="+metric+"&start_timestamp=60&end_timestamp=240", GetOpsDetails)
+		page := response["data"].(map[string]any)["page"].(map[string]any)
+		assert.EqualValues(t, expected, page["total"], metric)
+	}
+	assertMetricTotal("requests", 4)
+	assertMetricTotal("sla", 3)
+	assertMetricTotal("errors", 2)
+	assertMetricTotal("upstream", 1)
+	assertMetricTotal("duration", 1)
+	assertMetricTotal("ttft", 1)
 }
 
 func TestGetOpsTrendsReturnsChronologicalWallClockRates(t *testing.T) {

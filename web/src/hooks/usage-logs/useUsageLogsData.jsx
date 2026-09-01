@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
@@ -42,6 +42,7 @@ import {
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
+import { isMonitorProbeLog } from '../../components/table/usage-logs/modals/usageLogDetailAdapter';
 
 export const useLogsData = () => {
   const { t } = useTranslation();
@@ -74,6 +75,12 @@ export const useLogsData = () => {
   const [logCount, setLogCount] = useState(0);
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [logType, setLogType] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(
+    () => localStorage.getItem('logs-auto-refresh') === 'true',
+  );
+  const activePageRef = useRef(activePage);
+  const pageSizeRef = useRef(pageSize);
+  const refreshInFlightRef = useRef(false);
 
   // User and admin
   const isAdminUser = isAdmin();
@@ -247,6 +254,18 @@ export const useLogsData = () => {
     localStorage.setItem(BILLING_DISPLAY_MODE_STORAGE_KEY, billingDisplayMode);
   }, [BILLING_DISPLAY_MODE_STORAGE_KEY, billingDisplayMode]);
 
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
+
+  useEffect(() => {
+    pageSizeRef.current = pageSize;
+  }, [pageSize]);
+
+  useEffect(() => {
+    localStorage.setItem('logs-auto-refresh', String(autoRefresh));
+  }, [autoRefresh]);
+
   // 获取表单值的辅助函数，确保所有值都是字符串
   const getFormValues = () => {
     const formValues = formApi ? formApi.getValues() : {};
@@ -397,10 +416,14 @@ export const useLogsData = () => {
       logs[i].key = logs[i].id;
       let other = getLogOther(logs[i].other);
       let expandDataLocal = [];
+      const isMonitorProbe = isMonitorProbeLog(logs[i]);
 
       if (
         isAdminUser &&
-        (logs[i].type === 0 || logs[i].type === 2 || logs[i].type === 6)
+        (logs[i].type === 0 ||
+          logs[i].type === 2 ||
+          logs[i].type === 6 ||
+          isMonitorProbe)
       ) {
         expandDataLocal.push({
           key: t('渠道信息'),
@@ -442,6 +465,43 @@ export const useLogsData = () => {
           key: t('缓存创建 Tokens'),
           value: other.cache_creation_tokens,
         });
+      }
+      if (isMonitorProbe) {
+        const probeSucceeded = other?.probe_status === 'success';
+        expandDataLocal.push({
+          key: t('探测状态'),
+          value: probeSucceeded ? `✓ ${t('成功')}` : `✗ ${t('失败')}`,
+        });
+        if (other?.status_code !== undefined && other?.status_code !== null) {
+          expandDataLocal.push({
+            key: t('HTTP 状态码'),
+            value: other.status_code,
+          });
+        }
+        if (other?.error_code) {
+          expandDataLocal.push({
+            key: t('错误码'),
+            value: other.error_code,
+          });
+        }
+        if (other?.error_type) {
+          expandDataLocal.push({
+            key: t('错误类型'),
+            value: other.error_type,
+          });
+        }
+        if (other?.error_message || !probeSucceeded) {
+          expandDataLocal.push({
+            key: t('错误信息'),
+            value: other?.error_message || logs[i].content || t('暂无详细信息'),
+          });
+        }
+        if (other?.billing_scope) {
+          expandDataLocal.push({
+            key: t('标准口径'),
+            value: t('统计按标准口径累计，不受分组倍率和用户侧优惠影响'),
+          });
+        }
       }
       if (logs[i].type === 2) {
         if (other?.billing_mode !== 'tiered_expr') {
@@ -659,13 +719,23 @@ export const useLogsData = () => {
           ),
         });
       }
-      if (isAdminUser && logs[i].type !== 6 && logs[i].type !== 1) {
+      if (
+        isAdminUser &&
+        logs[i].type !== 6 &&
+        logs[i].type !== 1 &&
+        !isMonitorProbe
+      ) {
         expandDataLocal.push({
           key: t('请求转换'),
           value: requestConversionDisplayValue(other?.request_conversion),
         });
       }
-      if (isAdminUser && logs[i].type !== 6 && logs[i].type !== 1) {
+      if (
+        isAdminUser &&
+        logs[i].type !== 6 &&
+        logs[i].type !== 1 &&
+        !isMonitorProbe
+      ) {
         let localCountMode = '';
         if (other?.admin_info?.local_count_tokens) {
           localCountMode = t('本地计费');
@@ -826,10 +896,24 @@ export const useLogsData = () => {
   };
 
   // Refresh function
-  const refresh = async () => {
-    setActivePage(1);
-    handleEyeClick();
-    await loadLogs(1, pageSize);
+  const refresh = async (resetPage = true) => {
+    if (refreshInFlightRef.current) {
+      return;
+    }
+    refreshInFlightRef.current = true;
+    try {
+      const page = resetPage === false ? activePageRef.current : 1;
+      if (page === 1) {
+        activePageRef.current = 1;
+        setActivePage(1);
+      }
+      await Promise.all([
+        loadLogs(page, pageSizeRef.current),
+        handleEyeClick(),
+      ]);
+    } finally {
+      refreshInFlightRef.current = false;
+    }
   };
 
   // Copy text function
@@ -861,6 +945,18 @@ export const useLogsData = () => {
     }
   }, [formApi]);
 
+  useEffect(() => {
+    if (!autoRefresh) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refresh(false);
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh]);
+
   // Check if any record has expandable content
   const hasExpandableRows = () => {
     return logs.some(
@@ -881,6 +977,8 @@ export const useLogsData = () => {
     logType,
     stat,
     isAdminUser,
+    autoRefresh,
+    setAutoRefresh,
 
     // Form state
     formApi,

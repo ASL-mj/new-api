@@ -33,7 +33,10 @@ import {
   getLogOther,
   renderModelTag,
 } from '../../../helpers';
-import { buildUsageLogBriefSummary } from './modals/usageLogDetailAdapter';
+import {
+  buildUsageLogBriefSummary,
+  isMonitorProbeLog,
+} from './modals/usageLogDetailAdapter';
 import {
   getDurationTone,
   getFirstResponseTone,
@@ -59,6 +62,9 @@ const colors = [
   'violet',
   'yellow',
 ];
+
+const isUsageLogRecord = (record) =>
+  [0, 2, 5, 6].includes(Number(record?.type)) || isMonitorProbeLog(record);
 
 function formatRatio(ratio) {
   if (ratio === undefined || ratio === null) {
@@ -602,11 +608,7 @@ export const getLogsColumns = ({
           }
         }
 
-        return isAdminUser &&
-          (record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6) ? (
+        return isAdminUser && isUsageLogRecord(record) ? (
           <Space>
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <Tooltip content={record.channel_name || t('未知渠道')}>
@@ -697,10 +699,7 @@ export const getLogsColumns = ({
       title: t('令牌'),
       dataIndex: 'token_name',
       render: (text, record, index) => {
-        return record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6 ? (
+        return isUsageLogRecord(record) ? (
           <div>
             <Tag
               color='grey'
@@ -723,12 +722,7 @@ export const getLogsColumns = ({
       title: t('分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
-        if (
-          record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6
-        ) {
+        if (isUsageLogRecord(record)) {
           return <>{renderUsageLogGroup(record, t)}</>;
         } else {
           return <></>;
@@ -748,10 +742,7 @@ export const getLogsColumns = ({
       title: t('模型'),
       dataIndex: 'model_name',
       render: (text, record, index) => {
-        return record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6 ? (
+        return isUsageLogRecord(record) ? (
           <>{renderModelName(record, copyText, t)}</>
         ) : (
           <></>
@@ -768,14 +759,7 @@ export const getLogsColumns = ({
       dataIndex: 'reasoning_effort',
       width: 96,
       render: (text, record, index) => {
-        if (
-          !(
-            record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6
-          )
-        ) {
+        if (!isUsageLogRecord(record)) {
           return <></>;
         }
 
@@ -788,7 +772,9 @@ export const getLogsColumns = ({
       title: t('用时/首字'),
       dataIndex: 'use_time',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (
+          !(record.type === 2 || record.type === 5 || isMonitorProbeLog(record))
+        ) {
           return <></>;
         }
         let other = getLogOther(record.other);
@@ -817,14 +803,7 @@ export const getLogsColumns = ({
       title: t('Tokens'),
       dataIndex: 'prompt_tokens',
       render: (text, record, index) => {
-        if (
-          !(
-            record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6
-          )
-        ) {
+        if (!isUsageLogRecord(record)) {
           return <></>;
         }
         const other = getLogOther(record.other);
@@ -885,14 +864,7 @@ export const getLogsColumns = ({
       title: t('费用'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (
-          !(
-            record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6
-          )
-        ) {
+        if (!isUsageLogRecord(record)) {
           return <></>;
         }
         const other = getLogOther(record.other);

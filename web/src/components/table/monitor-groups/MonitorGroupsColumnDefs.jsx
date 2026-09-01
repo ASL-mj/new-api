@@ -182,15 +182,13 @@ export const getMonitorGroupsColumns = ({
           content={t('分组配置会被删除，历史探测记录将保留。')}
           onConfirm={() => deleteGroup(row)}
         >
-          <Tooltip content={t('删除')}>
-            <Button
-              theme='borderless'
-              type='danger'
-              size='small'
-              icon={<Trash2 size={15} />}
-              aria-label={t('删除')}
-            />
-          </Tooltip>
+          <Button
+            theme='borderless'
+            type='danger'
+            size='small'
+            icon={<Trash2 size={15} />}
+            aria-label={t('删除')}
+          />
         </Popconfirm>
       </Space>
     ),

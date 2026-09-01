@@ -22,7 +22,7 @@ import { Card, Empty, Tag, Typography } from '@douyinfe/semi-ui';
 
 import { formatOpsTimestamp } from '../../../hooks/ops/useOpsData';
 
-const OpsAlerts = ({ alerts = [], t }) => (
+const OpsAlerts = ({ alerts = [], openEventDetail, t }) => (
   <Card
     className='h-full !rounded-lg'
     title={t('最新告警')}
@@ -33,10 +33,12 @@ const OpsAlerts = ({ alerts = [], t }) => (
     ) : (
       <div className='max-h-72 divide-y overflow-y-auto'>
         {alerts.map((alert, index) => (
-          <div
+          <button
+            type='button'
             key={`${alert.created_at}-${alert.component}-${index}`}
-            className='py-3 first:pt-0 last:pb-0'
+            className='block w-full border-0 bg-transparent py-3 text-left first:pt-0 last:pb-0'
             style={{ borderColor: 'var(--semi-color-border)' }}
+            onClick={() => openEventDetail?.(alert)}
           >
             <div className='flex items-center justify-between gap-2'>
               <Tag
@@ -57,7 +59,7 @@ const OpsAlerts = ({ alerts = [], t }) => (
             >
               {alert.message}
             </Typography.Paragraph>
-          </div>
+          </button>
         ))}
       </div>
     )}

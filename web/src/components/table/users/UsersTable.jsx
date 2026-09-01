@@ -51,6 +51,8 @@ const UsersTable = (usersData) => {
     resetUserPasskey,
     resetUserTwoFA,
     t,
+    sortState,
+    handleSortToggle,
   } = usersData;
 
   // Modal states
@@ -141,6 +143,8 @@ const UsersTable = (usersData) => {
       showResetPasskeyModal: showResetPasskeyUserModal,
       showResetTwoFAModal: showResetTwoFAUserModal,
       showUserSubscriptionsModal: showUserSubscriptionsUserModal,
+      sortState,
+      onSortToggle: handleSortToggle,
     });
   }, [
     t,
@@ -153,6 +157,8 @@ const UsersTable = (usersData) => {
     showResetPasskeyUserModal,
     showResetTwoFAUserModal,
     showUserSubscriptionsUserModal,
+    sortState,
+    handleSortToggle,
   ]);
 
   // Handle compact mode by removing fixed positioning

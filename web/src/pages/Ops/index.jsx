@@ -50,7 +50,11 @@ const Ops = () => {
           <OpsRankingsPanel {...data} />
         </div>
         <div className='xl:col-span-3'>
-          <OpsAlerts alerts={data.overview?.recent_alerts || []} t={data.t} />
+          <OpsAlerts
+            alerts={data.overview?.recent_alerts || []}
+            openEventDetail={data.openEventDetail}
+            t={data.t}
+          />
         </div>
       </div>
       <SystemEventLogPanel {...data} />

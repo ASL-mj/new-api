@@ -228,6 +228,10 @@ body[theme-mode='dark'] .uldm-dialog {
   color: var(--uldm-green);
 }
 
+.uldm-error {
+  color: #d94841;
+}
+
 .uldm-frt {
   color: var(--uldm-ink-soft);
   font-size: 11px;

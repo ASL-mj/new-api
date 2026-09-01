@@ -79,6 +79,8 @@ export const useOpsData = () => {
   const [detailData, setDetailData] = useState({ items: [], total: 0 });
   const [detailPage, setDetailPage] = useState(1);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailRequestId, setDetailRequestId] = useState('');
+  const [eventDetail, setEventDetail] = useState(null);
 
   const [logDraft, setLogDraft] = useState({
     level: '',
@@ -236,10 +238,12 @@ export const useOpsData = () => {
       const sequence = ++sequenceRef.current.details;
       setDetailsLoading(true);
       try {
+        const detailFilters = detailRequestId ? {} : toOpsParams(filters);
         const response = await API.get('/api/ops/details', {
           params: {
-            ...toOpsParams(filters),
+            ...detailFilters,
             metric: metric.key,
+            request_id: detailRequestId || undefined,
             p: page,
             page_size: 20,
           },
@@ -263,12 +267,14 @@ export const useOpsData = () => {
         if (sequence === sequenceRef.current.details) setDetailsLoading(false);
       }
     },
-    [filters, t],
+    [detailRequestId, filters, t],
   );
 
-  const openDetail = (metric) => {
+  const openDetail = (metric, requestId = '') => {
     sequenceRef.current.details++;
+    setEventDetail(null);
     setDetailMetric(metric);
+    setDetailRequestId(requestId);
     setDetailData({ items: [], total: 0 });
     setDetailPage(1);
   };
@@ -276,6 +282,24 @@ export const useOpsData = () => {
   const closeDetail = () => {
     sequenceRef.current.details++;
     setDetailMetric(null);
+    setDetailRequestId('');
+    setEventDetail(null);
+    setDetailData({ items: [], total: 0 });
+    setDetailPage(1);
+  };
+
+  const openEventDetail = (event, { showEvent = false } = {}) => {
+    if (!event) return;
+    if (event.request_id && !showEvent) {
+      openDetail({ key: 'requests', title: t('请求详情') }, event.request_id);
+      return;
+    }
+    sequenceRef.current.details++;
+    setDetailMetric(null);
+    setDetailRequestId('');
+    setDetailData({ items: [], total: 0 });
+    setDetailPage(1);
+    setEventDetail(event);
   };
 
   const handleDetailPageChange = (page) => {
@@ -378,7 +402,10 @@ export const useOpsData = () => {
     detailData,
     detailPage,
     detailsLoading,
+    detailRequestId,
+    eventDetail,
     openDetail,
+    openEventDetail,
     closeDetail,
     handleDetailPageChange,
     logDraft,

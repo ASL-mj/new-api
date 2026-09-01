@@ -35,6 +35,7 @@ export const useUsersData = () => {
   const [searching, setSearching] = useState(false);
   const [groupOptions, setGroupOptions] = useState([]);
   const [userCount, setUserCount] = useState(0);
+  const [sortState, setSortState] = useState({ key: null, order: null });
 
   // Modal states
   const [showAddUser, setShowAddUser] = useState(false);
@@ -69,10 +70,17 @@ export const useUsersData = () => {
     setUsers(users);
   };
 
+  const buildSortQuery = (sort = sortState) => {
+    if (!sort?.key || !sort?.order) return '';
+    return `&sort_by=${encodeURIComponent(sort.key)}&sort_order=${sort.order}`;
+  };
+
   // Load users data
-  const loadUsers = async (startIdx, pageSize) => {
+  const loadUsers = async (startIdx, pageSize, sort = sortState) => {
     setLoading(true);
-    const res = await API.get(`/api/user/?p=${startIdx}&page_size=${pageSize}`);
+    const res = await API.get(
+      `/api/user/?p=${startIdx}&page_size=${pageSize}${buildSortQuery(sort)}`,
+    );
     const { success, message, data } = res.data;
     if (success) {
       const newPageData = data.items;
@@ -91,6 +99,7 @@ export const useUsersData = () => {
     pageSize,
     searchKeyword = null,
     searchGroup = null,
+    sort = sortState,
   ) => {
     // If no parameters passed, get values from form
     if (searchKeyword === null || searchGroup === null) {
@@ -101,12 +110,12 @@ export const useUsersData = () => {
 
     if (searchKeyword === '' && searchGroup === '') {
       // If keyword is blank, load files instead
-      await loadUsers(startIdx, pageSize);
+      await loadUsers(startIdx, pageSize, sort);
       return;
     }
     setSearching(true);
     const res = await API.get(
-      `/api/user/search?keyword=${searchKeyword}&group=${searchGroup}&p=${startIdx}&page_size=${pageSize}`,
+      `/api/user/search?keyword=${encodeURIComponent(searchKeyword)}&group=${encodeURIComponent(searchGroup)}&p=${startIdx}&page_size=${pageSize}${buildSortQuery(sort)}`,
     );
     const { success, message, data } = res.data;
     if (success) {
@@ -118,6 +127,26 @@ export const useUsersData = () => {
       showError(message);
     }
     setSearching(false);
+  };
+
+  const handleSortToggle = (key) => {
+    const order =
+      sortState.key !== key
+        ? 'asc'
+        : sortState.order === 'asc'
+          ? 'desc'
+          : sortState.order === 'desc'
+            ? null
+            : 'asc';
+    const nextSort = { key: order ? key : null, order };
+    setSortState(nextSort);
+    setActivePage(1);
+    const { searchKeyword, searchGroup } = getFormValues();
+    if (searchKeyword === '' && searchGroup === '') {
+      loadUsers(1, pageSize, nextSort).then();
+    } else {
+      searchUsers(1, pageSize, searchKeyword, searchGroup, nextSort).then();
+    }
   };
 
   // Manage user operations (promote, demote, enable, disable, delete)
@@ -193,9 +222,9 @@ export const useUsersData = () => {
     setActivePage(page);
     const { searchKeyword, searchGroup } = getFormValues();
     if (searchKeyword === '' && searchGroup === '') {
-      loadUsers(page, pageSize).then();
+      loadUsers(page, pageSize, sortState).then();
     } else {
-      searchUsers(page, pageSize, searchKeyword, searchGroup).then();
+      searchUsers(page, pageSize, searchKeyword, searchGroup, sortState).then();
     }
   };
 
@@ -204,7 +233,7 @@ export const useUsersData = () => {
     localStorage.setItem('page-size', size + '');
     setPageSize(size);
     setActivePage(1);
-    loadUsers(activePage, size)
+    loadUsers(1, size, sortState)
       .then()
       .catch((reason) => {
         showError(reason);
@@ -228,9 +257,9 @@ export const useUsersData = () => {
   const refresh = async (page = activePage) => {
     const { searchKeyword, searchGroup } = getFormValues();
     if (searchKeyword === '' && searchGroup === '') {
-      await loadUsers(page, pageSize);
+      await loadUsers(page, pageSize, sortState);
     } else {
-      await searchUsers(page, pageSize, searchKeyword, searchGroup);
+      await searchUsers(page, pageSize, searchKeyword, searchGroup, sortState);
     }
   };
 
@@ -283,6 +312,8 @@ export const useUsersData = () => {
     userCount,
     searching,
     groupOptions,
+    sortState,
+    handleSortToggle,
 
     // Modal state
     showAddUser,

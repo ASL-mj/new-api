@@ -4466,7 +4466,26 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Nhập tên menu tùy chỉnh và URL http hoặc https hợp lệ.",
     "确定删除这个自定义菜单吗？": "Xóa menu tùy chỉnh này?",
     "外部平台地址未配置或不可用": "URL nền tảng bên ngoài chưa được cấu hình hoặc không khả dụng",
+    "每 3 秒自动刷新使用日志": "Tự động làm mới nhật ký sử dụng mỗi 3 giây",
+    "统计按标准口径累计，不受分组倍率和用户侧优惠影响": "Thống kê được cộng dồn theo chuẩn, không bị ảnh hưởng bởi hệ số nhóm hoặc ưu đãi phía người dùng.",
     "{{price}}/1M Token": "{{price}}/1M Token",
-    "新窗口打开": "Mở trong cửa sổ mới"
+    "请求详情": "Chi tiết yêu cầu",
+    "事件详情": "Chi tiết sự kiện",
+    "事件 ID": "ID sự kiện",
+    "错误分类": "Phân loại lỗi",
+    "错误信息": "Thông tin lỗi",
+    "错误类型": "Loại lỗi",
+    "错误码": "Mã lỗi",
+    "查看请求详情": "Xem chi tiết yêu cầu",
+    "额外信息": "Thông tin bổ sung",
+    "暂无详细信息": "Không có thông tin chi tiết",
+    "总耗时": "Độ trễ tổng",
+    "新窗口打开": "Mở trong cửa sổ mới",
+    "HTTP 状态码": "Mã trạng thái HTTP",
+    "探测": "Kiểm tra",
+    "探测失败": "Kiểm tra thất bại",
+    "探测结果": "Kết quả kiểm tra",
+    "探测成功": "Kiểm tra thành công",
+    "标准口径": "Chuẩn thống kê"
   }
 }

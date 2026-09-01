@@ -4086,7 +4086,26 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Enter a custom menu name and a valid http or https URL.",
     "确定删除这个自定义菜单吗？": "Delete this custom menu?",
     "外部平台地址未配置或不可用": "The external platform URL is missing or unavailable",
+    "每 3 秒自动刷新使用日志": "Auto-refresh usage logs every 3 seconds",
+    "统计按标准口径累计，不受分组倍率和用户侧优惠影响": "Statistics use the standard basis and are not affected by group multipliers or user-side discounts.",
     "{{price}}/1M Token": "{{price}}/1M Token",
-    "新窗口打开": "Open in new window"
+    "请求详情": "Request details",
+    "事件详情": "Event details",
+    "事件 ID": "Event ID",
+    "错误分类": "Error category",
+    "错误信息": "Error message",
+    "错误类型": "Error type",
+    "错误码": "Error code",
+    "查看请求详情": "View request details",
+    "额外信息": "Additional information",
+    "暂无详细信息": "No detailed information",
+    "总耗时": "Total latency",
+    "新窗口打开": "Open in new window",
+    "HTTP 状态码": "HTTP status code",
+    "探测": "Probe",
+    "探测失败": "Probe failed",
+    "探测结果": "Probe result",
+    "探测成功": "Probe succeeded",
+    "标准口径": "Standard basis"
   }
 }

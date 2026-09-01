@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"runtime"
@@ -82,49 +83,46 @@ func GetOpsTrends(c *gin.Context) {
 }
 
 func GetOpsDetails(c *gin.Context) {
-	result, _, err := queryOpsMetrics(c)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	metric := c.DefaultQuery("metric", "requests")
 	if !isValidOpsDetailMetric(metric) {
 		common.ApiErrorI18n(c, i18n.MsgOpsInvalidMetric)
 		return
 	}
-	channelIDs := make([]int, 0)
-	channelSet := make(map[int]struct{})
-	for _, bucket := range result.Buckets {
-		if bucket.ChannelId <= 0 {
-			continue
-		}
-		if _, exists := channelSet[bucket.ChannelId]; exists {
-			continue
-		}
-		channelSet[bucket.ChannelId] = struct{}{}
-		channelIDs = append(channelIDs, bucket.ChannelId)
+	filter, err := parseOpsMetricQuery(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
 	}
-	channelNames := make(map[int]string, len(channelIDs))
-	if len(channelIDs) > 0 {
-		channels, err := model.GetChannelsByIds(channelIDs)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		for _, channel := range channels {
-			channelNames[channel.Id] = channel.Name
-		}
+	requestId := strings.TrimSpace(c.Query("request_id"))
+	// A request ID is an exact record lookup from an alert or a system event.
+	// Do not let the dashboard's current time-window hide an older linked log.
+	if requestId != "" {
+		filter.StartBucketTs = 0
+		filter.EndBucketTs = 0
+		filter.Model = ""
+		filter.Group = ""
+		filter.ChannelID = nil
+		filter.ChannelType = nil
 	}
-	rows := make([]dto.OpsDetailRow, 0, len(result.Buckets))
-	for _, bucket := range result.Buckets {
-		rows = append(rows, opsDetailRow(bucket, channelNames, common.TranslateMessage(c, i18n.MsgOpsUnassignedChannel)))
-	}
-	sort.Slice(rows, func(left, right int) bool {
-		if rows[left].BucketTs == rows[right].BucketTs {
-			return rows[left].RequestCount > rows[right].RequestCount
-		}
-		return rows[left].BucketTs > rows[right].BucketTs
+	logs, err := model.GetOpsRequestLogs(model.OpsRequestLogQuery{
+		StartTimestamp: filter.StartBucketTs,
+		EndTimestamp:   filter.EndBucketTs,
+		ModelName:      filter.Model,
+		Group:          filter.Group,
+		RequestId:      requestId,
+		ChannelId:      filter.ChannelID,
+		ChannelType:    filter.ChannelType,
 	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	rows, err := buildOpsRequestDetailRows(logs, common.TranslateMessage(c, i18n.MsgOpsUnassignedChannel))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	rows = filterOpsRequestDetails(rows, metric)
 	pageInfo := common.GetPageQuery(c)
 	start := pageInfo.GetStartIdx()
 	if start > len(rows) {
@@ -137,6 +135,184 @@ func GetOpsDetails(c *gin.Context) {
 	pageInfo.SetTotal(len(rows))
 	pageInfo.SetItems(rows[start:end])
 	common.ApiSuccess(c, gin.H{"metric": metric, "page": pageInfo})
+}
+
+func buildOpsRequestDetailRows(logs []*model.Log, unassignedChannel string) ([]dto.OpsRequestDetailRow, error) {
+	channelIDs := make([]int, 0)
+	channelSet := make(map[int]struct{})
+	for _, log := range logs {
+		if log.ChannelId <= 0 {
+			continue
+		}
+		if _, exists := channelSet[log.ChannelId]; !exists {
+			channelSet[log.ChannelId] = struct{}{}
+			channelIDs = append(channelIDs, log.ChannelId)
+		}
+	}
+	channels := make([]*model.Channel, 0, len(channelIDs))
+	if len(channelIDs) > 0 {
+		var err error
+		channels, err = model.GetChannelsByIds(channelIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	channelNames := make(map[int]string, len(channels))
+	channelTypes := make(map[int]int, len(channels))
+	for _, channel := range channels {
+		channelNames[channel.Id] = channel.Name
+		channelTypes[channel.Id] = channel.Type
+	}
+
+	rows := make([]dto.OpsRequestDetailRow, 0, len(logs))
+	for _, log := range logs {
+		rows = append(rows, opsRequestDetailRow(log, channelNames, channelTypes, unassignedChannel))
+	}
+	return rows, nil
+}
+
+func opsRequestDetailRow(log *model.Log, channelNames map[int]string, channelTypes map[int]int, unassignedChannel string) dto.OpsRequestDetailRow {
+	other, _ := common.StrToMap(log.Other)
+	statusCode := opsDetailInt(other, "status_code")
+	if statusCode == 0 && log.Type == model.LogTypeConsume {
+		statusCode = 200
+	}
+	errorCode := opsDetailString(other, "error_code")
+	errorType := opsDetailString(other, "error_type")
+	errorClass := string(opsmetrics.ErrorClassNone)
+	if log.Type == model.LogTypeError {
+		errorClass = string(opsmetrics.ClassifyError(opsmetrics.Sample{
+			StatusCode: statusCode,
+			ErrorCode:  errorCode,
+			LocalError: strings.Contains(strings.ToLower(errorType), "newapi"),
+		}))
+	}
+	totalLatencyMs := int64(log.UseTime) * 1000
+	if value, ok := opsDetailInt64Value(other, "latency_ms"); ok {
+		totalLatencyMs = value
+	}
+	var ttftMs *int64
+	if value, ok := opsDetailInt64Value(other, "frt"); ok {
+		ttftMs = &value
+	}
+	return dto.OpsRequestDetailRow{
+		Id: log.Id, CreatedAt: log.CreatedAt, Type: log.Type, ModelName: log.ModelName, Group: log.Group,
+		ChannelId: log.ChannelId, ChannelName: channelNameForOps(log.ChannelId, channelNames, unassignedChannel),
+		ChannelType: channelTypes[log.ChannelId], StatusCode: statusCode, ErrorClass: errorClass,
+		ErrorCode: errorCode, ErrorType: errorType, ErrorMessage: log.Content,
+		RequestPath: opsDetailString(other, "request_path"), RequestId: log.RequestId,
+		PromptTokens: log.PromptTokens, CompletionTokens: log.CompletionTokens, Quota: log.Quota,
+		TotalLatencyMs: totalLatencyMs, TtftMs: ttftMs, IsStream: log.IsStream,
+	}
+}
+
+func opsDetailString(values map[string]interface{}, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, exists := values[key]
+	if !exists || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func opsDetailInt(values map[string]interface{}, key string) int {
+	value, ok := opsDetailInt64Value(values, key)
+	if !ok {
+		return 0
+	}
+	return int(value)
+}
+
+func opsDetailInt64Value(values map[string]interface{}, key string) (int64, bool) {
+	if values == nil {
+		return 0, false
+	}
+	value, exists := values[key]
+	if !exists || value == nil {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case float32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func filterOpsRequestDetails(rows []dto.OpsRequestDetailRow, metric string) []dto.OpsRequestDetailRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	durationThreshold := opsRequestDetailPercentile(rows, metric, func(row dto.OpsRequestDetailRow) (int64, bool) {
+		return row.TotalLatencyMs, row.TotalLatencyMs > 0
+	})
+	ttftThreshold := opsRequestDetailPercentile(rows, metric, func(row dto.OpsRequestDetailRow) (int64, bool) {
+		if row.TtftMs == nil || *row.TtftMs <= 0 {
+			return 0, false
+		}
+		return *row.TtftMs, true
+	})
+	filtered := make([]dto.OpsRequestDetailRow, 0, len(rows))
+	for _, row := range rows {
+		include := false
+		switch metric {
+		case "requests":
+			include = true
+		case "sla":
+			include = row.ErrorClass != string(opsmetrics.ErrorClassBusinessLimited)
+		case "errors":
+			include = row.Type == model.LogTypeError
+		case "upstream":
+			include = row.ErrorClass == string(opsmetrics.ErrorClassUpstream)
+		case "duration":
+			include = durationThreshold != nil && row.TotalLatencyMs >= *durationThreshold
+		case "ttft":
+			include = ttftThreshold != nil && row.TtftMs != nil && *row.TtftMs >= *ttftThreshold
+		}
+		if include {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func opsRequestDetailPercentile(rows []dto.OpsRequestDetailRow, metric string, getValue func(dto.OpsRequestDetailRow) (int64, bool)) *int64 {
+	if metric != "duration" && metric != "ttft" {
+		return nil
+	}
+	values := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if value, ok := getValue(row); ok {
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Slice(values, func(left, right int) bool { return values[left] < values[right] })
+	index := int(math.Ceil(float64(len(values))*0.95)) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	threshold := values[index]
+	return &threshold
 }
 
 func GetOpsRankings(c *gin.Context) {
@@ -505,7 +681,7 @@ func recentOpsAlertsForContext(c *gin.Context, limit int) []dto.OpsAlertItem {
 	}
 	rows := make([]model.SystemEventLog, 0, limit)
 	if err := model.DB.Select(
-		"created_at", "level", "component", "message", "message_key", "extra",
+		"id", "created_at", "level", "component", "message", "message_key", "extra",
 		"request_id", "channel_id", "model_name", "group", "status_code", "latency_ms",
 	).
 		Where("level IN ?", []string{"warn", "error"}).
@@ -521,10 +697,18 @@ func recentOpsAlertsForContext(c *gin.Context, limit int) []dto.OpsAlertItem {
 			row = localizeSystemEventLog(c, row)
 		}
 		alerts = append(alerts, dto.OpsAlertItem{
-			CreatedAt: row.CreatedAt,
-			Level:     row.Level,
-			Component: row.Component,
-			Message:   row.Message,
+			Id:         row.Id,
+			CreatedAt:  row.CreatedAt,
+			Level:      row.Level,
+			Component:  row.Component,
+			Message:    row.Message,
+			RequestId:  row.RequestId,
+			ChannelId:  row.ChannelId,
+			ModelName:  row.ModelName,
+			Group:      row.Group,
+			StatusCode: row.StatusCode,
+			LatencyMs:  row.LatencyMs,
+			Extra:      row.Extra,
 		})
 	}
 	return alerts

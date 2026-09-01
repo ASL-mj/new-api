@@ -35,7 +35,7 @@ func prepareMonitorRunnerTables(t *testing.T) {
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
 	recordMonitorSystemEvent = func(model.SystemEventLog) {}
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.MonitorGroup{}, &model.MonitorGroupTarget{}, &model.MonitorCheck{}, &model.OpsMetricBucket{}, &model.OpsMetricHistogram{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Log{}, &model.MonitorGroup{}, &model.MonitorGroupTarget{}, &model.MonitorCheck{}, &model.OpsMetricBucket{}, &model.OpsMetricHistogram{}))
 
 	t.Cleanup(func() {
 		model.DB = previousDB

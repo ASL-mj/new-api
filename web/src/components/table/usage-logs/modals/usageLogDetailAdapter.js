@@ -96,6 +96,16 @@ const isViolationFeeLog = (other) =>
   Boolean(other?.violation_fee_code) ||
   Boolean(other?.violation_fee_marker);
 
+// System logs are only rendered as request-like rows when they were written by
+// the channel probe recorder. Other type=4 records remain system records.
+export const isMonitorProbeLog = (record) => {
+  if (Number(record?.type) !== 4) {
+    return false;
+  }
+  const other = getLogOther(record?.other);
+  return other?.monitor_probe === true || other?.monitor_probe === 'true';
+};
+
 // 管理员调整用户额度的日志没有独立类型，后端以管理日志的 content 记录操作。
 // 只识别额度调整语句，避免把其他管理操作误渲染成额度详情。
 export const isAdminQuotaAdjustmentLog = (record) =>
@@ -309,6 +319,12 @@ const splitExpandRows = (expandRows, t) => {
       '请求并计费模型',
       '实际模型',
       '日志详情',
+      '探测状态',
+      'HTTP 状态码',
+      '错误码',
+      '错误类型',
+      '错误信息',
+      '标准口径',
     ].map((key) => t(key)),
   );
   const extraRows = rows.filter((row) => !structuredKeys.has(row.key));
@@ -323,6 +339,11 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
   const other = getLogOther(record.other) || {};
   const { extraRows, findRow } = splitExpandRows(expandRows, t);
   const isQuotaAdjustment = isAdminQuotaAdjustmentLog(record);
+  const isMonitorProbe = isMonitorProbeLog(record);
+  const probeStatus = String(
+    other.probe_status ||
+      (record.content === '渠道探测成功' ? 'success' : 'failed'),
+  ).toLowerCase();
 
   const isModelMapped =
     other.is_model_mapped &&
@@ -352,15 +373,30 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
 
   const ss = other.stream_status || null;
   const billingProcessRow = findRow('计费过程');
+  const probe = isMonitorProbe
+    ? {
+        success: probeStatus === 'success',
+        status: probeStatus,
+        statusCode: other.status_code ?? null,
+        errorCode: other.error_code || null,
+        errorType: other.error_type || null,
+        errorMessage:
+          other.error_message ||
+          (probeStatus === 'failed' ? record.content : null),
+        billingScope: other.billing_scope || null,
+      }
+    : null;
 
   return {
     id: record.id,
     type: record.type,
     typeLabel: isQuotaAdjustment
       ? t('管理')
-      : record.type === 2
-        ? t('消耗')
-        : t('记录'),
+      : isMonitorProbe
+        ? t('探测')
+        : record.type === 2
+          ? t('消耗')
+          : t('记录'),
     createdAt: record.timestamp2string || formatTimestamp(record.created_at),
     requestId: record.request_id || '',
     group: record.group || other.group || '-',
@@ -385,6 +421,7 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
     },
     billing: buildBilling(record, other, t),
     billingProcess: billingProcessRow ? billingProcessRow.value : null,
+    probe,
     violation: isViolationFeeLog(other)
       ? {
           feeText: renderQuota(other?.fee_quota ?? record?.quota ?? 0, 6),
@@ -405,6 +442,17 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
 export function buildUsageLogBriefSummary(record, t) {
   if (!record) {
     return null;
+  }
+  if (isMonitorProbeLog(record)) {
+    const other = getLogOther(record.other) || {};
+    const probeStatus = String(
+      other.probe_status ||
+        (record.content === '渠道探测成功' ? 'success' : 'failed'),
+    ).toLowerCase();
+    if (probeStatus === 'failed') {
+      return `${t('探测失败')} · ${other.error_code || other.error_type || t('查看详情')}`;
+    }
+    return `${t('探测成功')} · ${formatCount(toNum(record.prompt_tokens) + toNum(record.completion_tokens))} Token`;
   }
   if (record.type === 5) {
     return t('错误详情');

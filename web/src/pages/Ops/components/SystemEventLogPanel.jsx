@@ -42,6 +42,7 @@ const SystemEventLogPanel = ({
   applyLogFilters,
   resetLogFilters,
   handleLogPageChange,
+  openEventDetail,
   t,
 }) => {
   const columns = [
@@ -83,6 +84,21 @@ const SystemEventLogPanel = ({
       key: 'status_code',
       width: 80,
       render: (value) => value || '--',
+    },
+    {
+      title: t('操作'),
+      key: 'actions',
+      width: 100,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button
+          size='small'
+          theme='borderless'
+          onClick={() => openEventDetail?.(record, { showEvent: true })}
+        >
+          {t('查看详情')}
+        </Button>
+      ),
     },
   ];
 

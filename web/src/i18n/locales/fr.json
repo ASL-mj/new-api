@@ -3943,7 +3943,26 @@
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Saisissez un nom de menu et une URL http ou https valide.",
     "确定删除这个自定义菜单吗？": "Supprimer ce menu personnalisé ?",
     "外部平台地址未配置或不可用": "L'URL de la plateforme externe est absente ou indisponible",
+    "每 3 秒自动刷新使用日志": "Actualiser automatiquement les journaux d'utilisation toutes les 3 secondes",
+    "统计按标准口径累计，不受分组倍率和用户侧优惠影响": "Les statistiques sont cumulées selon la base standard, sans tenir compte des multiplicateurs de groupe ni des remises utilisateur.",
     "{{price}}/1M Token": "{{price}}/1M Token",
-    "新窗口打开": "Ouvrir dans une nouvelle fenêtre"
+    "请求详情": "Détails de la requête",
+    "事件详情": "Détails de l'événement",
+    "事件 ID": "ID de l'événement",
+    "错误分类": "Catégorie d'erreur",
+    "错误信息": "Message d'erreur",
+    "错误类型": "Type d'erreur",
+    "错误码": "Code d'erreur",
+    "查看请求详情": "Voir les détails de la requête",
+    "额外信息": "Informations supplémentaires",
+    "暂无详细信息": "Aucune information détaillée",
+    "总耗时": "Latence totale",
+    "新窗口打开": "Ouvrir dans une nouvelle fenêtre",
+    "HTTP 状态码": "Code d'état HTTP",
+    "探测": "Sonde",
+    "探测失败": "Échec de la sonde",
+    "探测结果": "Résultat de la sonde",
+    "探测成功": "Sonde réussie",
+    "标准口径": "Base standard"
   }
 }

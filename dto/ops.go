@@ -32,10 +32,18 @@ type OpsRatePoint struct {
 }
 
 type OpsAlertItem struct {
-	CreatedAt int64  `json:"created_at"`
-	Level     string `json:"level"`
-	Component string `json:"component"`
-	Message   string `json:"message"`
+	Id         int    `json:"id"`
+	CreatedAt  int64  `json:"created_at"`
+	Level      string `json:"level"`
+	Component  string `json:"component"`
+	Message    string `json:"message"`
+	RequestId  string `json:"request_id"`
+	ChannelId  int    `json:"channel_id"`
+	ModelName  string `json:"model_name"`
+	Group      string `json:"group"`
+	StatusCode int    `json:"status_code"`
+	LatencyMs  int64  `json:"latency_ms"`
+	Extra      string `json:"extra"`
 }
 
 type OpsOverview struct {
@@ -72,6 +80,30 @@ type OpsDetailRow struct {
 	UpstreamErrors int64   `json:"upstream_errors"`
 	AvgTtftMs      int64   `json:"avg_ttft_ms"`
 	AvgDurationMs  int64   `json:"avg_duration_ms"`
+}
+
+type OpsRequestDetailRow struct {
+	Id               int    `json:"id"`
+	CreatedAt        int64  `json:"created_at"`
+	Type             int    `json:"type"`
+	ModelName        string `json:"model_name"`
+	Group            string `json:"group"`
+	ChannelId        int    `json:"channel_id"`
+	ChannelName      string `json:"channel_name"`
+	ChannelType      int    `json:"channel_type"`
+	StatusCode       int    `json:"status_code"`
+	ErrorClass       string `json:"error_class"`
+	ErrorCode        string `json:"error_code"`
+	ErrorType        string `json:"error_type"`
+	ErrorMessage     string `json:"error_message"`
+	RequestPath      string `json:"request_path"`
+	RequestId        string `json:"request_id"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	Quota            int    `json:"quota"`
+	TotalLatencyMs   int64  `json:"total_latency_ms"`
+	TtftMs           *int64 `json:"ttft_ms"`
+	IsStream         bool   `json:"is_stream"`
 }
 
 type OpsRankingRow struct {

@@ -29,6 +29,7 @@ import {
   Dropdown,
 } from '@douyinfe/semi-ui';
 import { IconMore } from '@douyinfe/semi-icons';
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import {
   renderGroup,
   renderNumber,
@@ -37,6 +38,30 @@ import {
 } from '../../../helpers';
 
 const renderTimestamp = (text) => (text ? timestamp2string(text) : '-');
+
+const renderSortableHeader = (label, sortKey, sortState, onSortToggle) => {
+  const active = sortState?.key === sortKey;
+  const order = active ? sortState.order : null;
+  const Icon =
+    order === 'asc' ? ArrowUp : order === 'desc' ? ArrowDown : ArrowUpDown;
+  return (
+    <div
+      className='flex cursor-pointer select-none items-center gap-1'
+      onClick={(event) => {
+        event.stopPropagation();
+        onSortToggle?.(sortKey);
+      }}
+    >
+      <span>{label}</span>
+      <Icon
+        size={12}
+        className={
+          active ? 'text-semi-color-primary' : 'text-semi-color-text-2'
+        }
+      />
+    </div>
+  );
+};
 
 /**
  * Render user role
@@ -316,6 +341,8 @@ export const getUsersColumns = ({
   showResetPasskeyModal,
   showResetTwoFAModal,
   showUserSubscriptionsModal,
+  sortState,
+  onSortToggle,
 }) => {
   return [
     {
@@ -334,7 +361,12 @@ export const getUsersColumns = ({
         renderStatistics(text, record, showEnableDisableModal, t),
     },
     {
-      title: t('剩余额度/总额度'),
+      title: renderSortableHeader(
+        t('剩余额度/总额度'),
+        'quota',
+        sortState,
+        onSortToggle,
+      ),
       key: 'quota_usage',
       render: (text, record) => renderQuotaUsage(text, record, t),
     },
@@ -353,7 +385,12 @@ export const getUsersColumns = ({
       },
     },
     {
-      title: t('邀请信息'),
+      title: renderSortableHeader(
+        t('邀请信息'),
+        'aff_count',
+        sortState,
+        onSortToggle,
+      ),
       dataIndex: 'invite',
       render: (text, record, index) => renderInviteInfo(text, record, t),
     },
