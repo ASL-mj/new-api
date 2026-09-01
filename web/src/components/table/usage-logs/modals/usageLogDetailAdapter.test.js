@@ -24,6 +24,7 @@ import {
   isMonitorProbeLog,
   isAdminQuotaAdjustmentLog,
 } from './usageLogDetailAdapter';
+import { encodeToBase64 } from '../../../../helpers/base64';
 
 const storage = new Map();
 
@@ -266,6 +267,22 @@ describe('usage log detail adapter', () => {
 
     const errorLog = { ...baseLog, type: 5 };
     expect(buildUsageLogBriefSummary(errorLog, identityT)).toBe('错误详情');
+  });
+
+  test('decodes UTF-8 tier labels in the brief summary', () => {
+    const tiered = {
+      ...baseLog,
+      other: JSON.stringify({
+        billing_mode: 'tiered_expr',
+        expr_b64: encodeToBase64(
+          'tier("标准", p * 5 + c * 30 + cr * 0.2 + cc * 2)',
+        ),
+        matched_tier: '标准',
+      }),
+    };
+    expect(buildUsageLogBriefSummary(tiered, identityT)).toBe(
+      '阶梯(标准) · $5 / $30/M +2',
+    );
   });
 
   test('adapts channel probe logs into request-like columns and details', () => {

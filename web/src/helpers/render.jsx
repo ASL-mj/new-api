@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import i18next from 'i18next';
 import { Modal, Tag, Typography, Avatar } from '@douyinfe/semi-ui';
+import { decodeFromBase64 } from './base64';
 import { getCurrencyConfig } from './currency';
 import { copy, showSuccess } from './utils';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
@@ -2221,7 +2222,7 @@ export function renderTieredModelPrice(opts) {
   } = opts;
   let exprStr = '';
   try {
-    exprStr = atob(exprB64);
+    exprStr = decodeFromBase64(exprB64);
   } catch {
     /* ignore */
   }
@@ -2267,7 +2268,7 @@ export function renderTieredModelPriceSimple(opts) {
   } = opts;
   let exprStr = '';
   try {
-    exprStr = atob(exprB64);
+    exprStr = decodeFromBase64(exprB64);
   } catch {
     /* ignore */
   }

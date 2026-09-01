@@ -22,6 +22,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { getLogOther } from '../../../../helpers/log';
 import { getCurrencyConfig } from '../../../../helpers/currency';
 import { parseTiersFromExpr } from '../../../../helpers/billingExpr';
+import { decodeFromBase64 } from '../../../../helpers/base64';
 
 // 结构化计费行支持的费用变量（与后端阶梯计费变量语义一致，见 pkg/billingexpr/expr.md）
 const TIERED_VAR_DEFS = [
@@ -169,7 +170,7 @@ const buildStandardBillingItems = (record, other, t) => {
 const buildTieredBillingItems = (record, other, t) => {
   let exprStr = '';
   try {
-    exprStr = atob(other.expr_b64);
+    exprStr = decodeFromBase64(other.expr_b64);
   } catch (e) {
     return { items: null, tier: null };
   }
@@ -486,7 +487,7 @@ export function buildUsageLogBriefSummary(record, t) {
   if (other?.billing_mode === 'tiered_expr' && other?.expr_b64) {
     let exprStr = '';
     try {
-      exprStr = atob(other.expr_b64);
+      exprStr = decodeFromBase64(other.expr_b64);
     } catch (e) {
       exprStr = '';
     }

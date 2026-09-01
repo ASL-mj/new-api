@@ -54,3 +54,34 @@ export const encodeToBase64 = (value) => {
 
   return window.btoa(toBinaryString(input));
 };
+
+export const decodeFromBase64 = (value) => {
+  const input = value == null ? '' : String(value);
+  let binary;
+
+  if (typeof window !== 'undefined' && typeof window.atob === 'function') {
+    binary = window.atob(input);
+  } else if (
+    typeof globalThis !== 'undefined' &&
+    typeof globalThis.atob === 'function'
+  ) {
+    binary = globalThis.atob(input);
+  } else if (typeof Buffer !== 'undefined') {
+    return Buffer.from(input, 'base64').toString('utf-8');
+  } else {
+    throw new Error(
+      'Base64 decoding is unavailable in the current environment',
+    );
+  }
+
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  if (typeof TextDecoder !== 'undefined') {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+
+  return decodeURIComponent(
+    Array.from(bytes, (byte) => `%${byte.toString(16).padStart(2, '0')}`).join(
+      '',
+    ),
+  );
+};
