@@ -23,12 +23,14 @@ type relayMetricSample struct {
 }
 
 type quotaMetricsTestBilling struct {
-	err         error
-	settleCalls int
+	err          error
+	settleCalls  int
+	settledQuota int
 }
 
-func (b *quotaMetricsTestBilling) Settle(int) error {
+func (b *quotaMetricsTestBilling) Settle(quota int) error {
 	b.settleCalls++
+	b.settledQuota = quota
 	return b.err
 }
 
@@ -139,6 +141,29 @@ func TestPostTextConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {
 		require.Equal(t, 1, billing.settleCalls)
 		requireNoRecordedRelayMetric(t, recorded)
 	})
+}
+
+func TestPostTextConsumeQuotaEstimatedClientGoneUsageIsLoggedButNotSettled(t *testing.T) {
+	recorded := captureQuotaMetrics(t)
+	billing := &quotaMetricsTestBilling{}
+	info := newQuotaMetricsRelayInfo(billing)
+
+	PostTextConsumeQuota(newQuotaMetricsContext(), info, &dto.Usage{
+		PromptTokens: 17112,
+		TotalTokens:  17112,
+		UsageSource:  dto.UsageSourceEstimatedClientGone,
+	}, nil)
+
+	require.Equal(t, 1, billing.settleCalls)
+	require.Zero(t, billing.settledQuota)
+	requireNoRecordedRelayMetric(t, recorded)
+
+	var log model.Log
+	require.NoError(t, model.LOG_DB.Last(&log).Error)
+	require.Equal(t, 17112, log.PromptTokens)
+	require.Zero(t, log.CompletionTokens)
+	require.Zero(t, log.Quota)
+	require.Contains(t, log.Other, dto.UsageSourceEstimatedClientGone)
 }
 
 func TestPostAudioConsumeQuotaRecordsOnlySettledMetrics(t *testing.T) {

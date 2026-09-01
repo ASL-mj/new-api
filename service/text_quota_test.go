@@ -107,6 +107,31 @@ func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.
 	require.Equal(t, 118, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryEstimatedClientGoneUsageIsNeverBilled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.5",
+		PriceData: types.PriceData{
+			ModelRatio:      3,
+			CompletionRatio: 8,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 2},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens: 17112,
+		TotalTokens:  17112,
+		UsageSource:  dto.UsageSourceEstimatedClientGone,
+	})
+
+	require.Equal(t, 17112, summary.PromptTokens)
+	require.Zero(t, summary.CompletionTokens)
+	require.Equal(t, 17112, summary.TotalTokens)
+	require.Zero(t, summary.Quota)
+}
+
 func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

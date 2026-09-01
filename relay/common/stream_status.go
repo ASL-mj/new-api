@@ -4,21 +4,23 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type StreamEndReason string
 
 const (
-	StreamEndReasonNone        StreamEndReason = ""
-	StreamEndReasonDone        StreamEndReason = "done"
-	StreamEndReasonTimeout     StreamEndReason = "timeout"
-	StreamEndReasonClientGone  StreamEndReason = "client_gone"
-	StreamEndReasonScannerErr  StreamEndReason = "scanner_error"
-	StreamEndReasonHandlerStop StreamEndReason = "handler_stop"
-	StreamEndReasonEOF         StreamEndReason = "eof"
-	StreamEndReasonPanic       StreamEndReason = "panic"
-	StreamEndReasonPingFail    StreamEndReason = "ping_fail"
+	StreamEndReasonNone              StreamEndReason = ""
+	StreamEndReasonDone              StreamEndReason = "done"
+	StreamEndReasonTimeout           StreamEndReason = "timeout"
+	StreamEndReasonClientGone        StreamEndReason = "client_gone"
+	StreamEndReasonClientGoneTimeout StreamEndReason = "client_gone_timeout"
+	StreamEndReasonScannerErr        StreamEndReason = "scanner_error"
+	StreamEndReasonHandlerStop       StreamEndReason = "handler_stop"
+	StreamEndReasonEOF               StreamEndReason = "eof"
+	StreamEndReasonPanic             StreamEndReason = "panic"
+	StreamEndReasonPingFail          StreamEndReason = "ping_fail"
 )
 
 const maxStreamErrorEntries = 20
@@ -29,13 +31,17 @@ type StreamErrorEntry struct {
 }
 
 type StreamStatus struct {
-	EndReason  StreamEndReason
-	EndError   error
-	endOnce    sync.Once
+	EndReason StreamEndReason
+	EndError  error
+	endOnce   sync.Once
 
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
 	ErrorCount int
+
+	// DownstreamDisconnected is independent from EndReason: a client may leave
+	// while the upstream stream still completes normally and returns final usage.
+	downstreamDisconnected atomic.Bool
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -50,6 +56,16 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 		s.EndReason = reason
 		s.EndError = err
 	})
+}
+
+func (s *StreamStatus) MarkDownstreamDisconnected() {
+	if s != nil {
+		s.downstreamDisconnected.Store(true)
+	}
+}
+
+func (s *StreamStatus) IsDownstreamDisconnected() bool {
+	return s != nil && s.downstreamDisconnected.Load()
 }
 
 func (s *StreamStatus) RecordError(msg string) {
@@ -100,6 +116,9 @@ func (s *StreamStatus) Summary() string {
 	}
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "reason=%s", s.EndReason)
+	if s.IsDownstreamDisconnected() {
+		fmt.Fprint(b, " downstream_disconnected=true")
+	}
 	if s.EndError != nil {
 		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
 	}

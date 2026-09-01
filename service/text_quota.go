@@ -66,6 +66,10 @@ func cacheWriteTokensTotal(summary textQuotaSummary) int {
 	return summary.CacheCreationTokens
 }
 
+func isEstimatedClientGoneUsage(usage *dto.Usage) bool {
+	return usage != nil && usage.UsageSource == dto.UsageSourceEstimatedClientGone
+}
+
 func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) bool {
 	if relayInfo == nil || usage == nil {
 		return false
@@ -221,6 +225,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
+
+	if isEstimatedClientGoneUsage(usage) {
+		// This value is retained for auditing only. The upstream did not return
+		// final usage, so no user or channel quota may be settled from it.
+		summary.Quota = 0
+		return summary
+	}
+
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
 	isOpenRouterClaudeBilling := relayInfo.ChannelMeta != nil &&
 		relayInfo.ChannelType == constant.ChannelTypeOpenRouter &&
@@ -351,10 +363,11 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
+	estimatedClientGoneUsage := isEstimatedClientGoneUsage(usage)
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
-	if originUsage != nil {
+	if originUsage != nil && !estimatedClientGoneUsage {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
@@ -363,7 +376,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
-	if originUsage != nil {
+	if originUsage != nil && !estimatedClientGoneUsage {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
@@ -395,7 +408,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+	} else if estimatedClientGoneUsage {
+		extraContent = append(extraContent, "客户端中断：输入 Token 为本地预估值，本次未计费")
 	} else {
+		if relayInfo.StreamStatus != nil && relayInfo.StreamStatus.IsDownstreamDisconnected() && relayInfo.StreamStatus.IsNormalEnd() {
+			extraContent = append(extraContent, "客户端已断开：上游已完成，按最终 Token 结算")
+		}
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		standardQuota := standardChannelQuotaForText(ctx, relayInfo, usage, summary, tieredBillingApplied, tieredResult)
 		if err := RecordRelayChannelUsage(relayInfo, summary.Quota, standardQuota, int64(summary.TotalTokens), 1); err != nil {
@@ -405,7 +423,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
-	} else {
+	} else if !estimatedClientGoneUsage {
 		recordTextQuotaMetrics(relayInfo, summary)
 	}
 
@@ -432,6 +450,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["usage_semantic"] = "anthropic"
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if usage != nil && usage.UsageSource != "" {
+		other["usage_source"] = usage.UsageSource
 	}
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason

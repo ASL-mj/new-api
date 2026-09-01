@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,6 +93,80 @@ func TestStreamScannerHandler_EmptyBody(t *testing.T) {
 	})
 
 	assert.False(t, called.Load(), "handler should not be called for empty body")
+}
+
+func TestStreamScannerHandler_ClientCancelDrainsUpstreamUntilDone(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+
+	resp := &http.Response{Body: reader}
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	firstHandled := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, _ *StreamResult) {
+			if data == "first" {
+				_, _ = c.Writer.WriteString("first-reached")
+				close(firstHandled)
+			}
+			if data == "second" {
+				_, _ = c.Writer.WriteString("must-not-reach-disconnected-client")
+			}
+		})
+		close(done)
+	}()
+
+	_, err := fmt.Fprint(writer, "data: first\n")
+	require.NoError(t, err)
+
+	select {
+	case <-firstHandled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first upstream event")
+	}
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		return info.StreamStatus != nil && info.StreamStatus.IsDownstreamDisconnected()
+	}, time.Second, 10*time.Millisecond)
+
+	_, err = fmt.Fprint(writer, "data: second\n")
+	require.NoError(t, err)
+	_, err = fmt.Fprint(writer, "data: [DONE]\n")
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream handler did not finish draining the upstream response")
+	}
+
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.True(t, info.StreamStatus.IsDownstreamDisconnected())
+	assert.Equal(t, "first-reached", recorder.Body.String())
 }
 
 func TestStreamScannerHandler_1000Chunks(t *testing.T) {

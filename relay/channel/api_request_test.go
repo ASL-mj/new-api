@@ -1,14 +1,149 @@
 package channel
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewUpstreamRequestInheritsDownstreamContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+
+	req, err := newUpstreamRequest(c, nil, http.MethodPost, "https://example.com/v1/responses", nil)
+	require.NoError(t, err)
+	require.NoError(t, req.Context().Err())
+
+	cancel()
+	require.ErrorIs(t, req.Context().Err(), context.Canceled)
+}
+
+func TestNewUpstreamRequestRejectsMissingDownstreamRequest(t *testing.T) {
+	req, err := newUpstreamRequest(&gin.Context{}, nil, http.MethodGet, "https://example.com", nil)
+	require.Nil(t, req)
+	require.EqualError(t, err, "missing downstream request context")
+}
+
+func TestNewUpstreamRequestPreservesBody(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	req, err := newUpstreamRequest(c, nil, http.MethodPost, "https://example.com/v1/responses", strings.NewReader("payload"))
+	require.NoError(t, err)
+	require.NotNil(t, req.Body)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, "payload", string(body))
+}
+
+func TestNewUpstreamRequestCancellationCancelsTransport(t *testing.T) {
+	upstreamStarted := make(chan struct{})
+	upstreamCanceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(upstreamStarted)
+		<-r.Context().Done()
+		close(upstreamCanceled)
+	}))
+	defer upstream.Close()
+
+	downstreamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(downstreamCtx)
+
+	req, err := newUpstreamRequest(c, nil, http.MethodPost, upstream.URL, nil)
+	require.NoError(t, err)
+
+	doResult := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		doResult <- err
+	}()
+
+	select {
+	case <-upstreamStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request was not started")
+	}
+
+	cancel()
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request was not canceled with the downstream request")
+	}
+
+	select {
+	case err := <-doResult:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("client transport did not return after cancellation")
+	}
+}
+
+func TestNewUpstreamRequestStreamSurvivesDownstreamCancellation(t *testing.T) {
+	upstreamStarted := make(chan struct{})
+	allowUpstreamReturn := make(chan struct{})
+	upstreamCanceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(upstreamStarted)
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		select {
+		case <-allowUpstreamReturn:
+		case <-r.Context().Done():
+			close(upstreamCanceled)
+		}
+	}))
+	defer upstream.Close()
+
+	downstreamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(downstreamCtx)
+
+	req, err := newUpstreamRequest(c, &relaycommon.RelayInfo{IsStream: true}, http.MethodPost, upstream.URL, nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	select {
+	case <-upstreamStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request was not started")
+	}
+
+	cancel()
+	require.NoError(t, req.Context().Err())
+	select {
+	case <-upstreamCanceled:
+		t.Fatal("streaming upstream request was canceled with the downstream request")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(allowUpstreamReturn)
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
