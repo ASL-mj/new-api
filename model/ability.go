@@ -1,8 +1,10 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -28,6 +30,23 @@ type AbilityWithChannel struct {
 	ChannelType int `json:"channel_type"`
 }
 
+// ModelOption separates the model shown to a user from the upstream model value
+// that must be sent back through the relay request.
+type ModelOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type modelMappingRow struct {
+	Model        string
+	ModelMapping *string
+}
+
+type modelMappingAbilityRow struct {
+	Ability
+	ModelMapping *string `gorm:"column:model_mapping"`
+}
+
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
 	err := DB.Table("abilities").
@@ -43,6 +62,102 @@ func GetGroupEnabledModels(group string) []string {
 	// Find distinct models
 	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
 	return models
+}
+
+// GetGroupModelOptions exposes a channel mapping to the playground. A mapping
+// source remains the user-facing label while its resolved target is the model
+// value sent in the request.
+func GetGroupModelOptions(groups []string) ([]ModelOption, error) {
+	if len(groups) == 0 {
+		return []ModelOption{}, nil
+	}
+
+	var rows []modelMappingRow
+	err := DB.Table("abilities").
+		Select("abilities.model, channels.model_mapping").
+		Joins("JOIN channels ON channels.id = abilities.channel_id").
+		Where(qualifiedAbilityGroupColumn()+" IN ? AND abilities.enabled = ?", groups, true).
+		Order("abilities.model ASC, channels.priority DESC, channels.id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	options := make([]ModelOption, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		modelName := strings.TrimSpace(row.Model)
+		if modelName == "" {
+			continue
+		}
+		requestModel := resolveModelMappingTarget(modelName, row.ModelMapping)
+		if _, ok := seen[requestModel]; ok {
+			continue
+		}
+		seen[requestModel] = struct{}{}
+		options = append(options, ModelOption{
+			Label: modelName,
+			Value: requestModel,
+		})
+	}
+	return options, nil
+}
+
+func parseModelMapping(rawMapping *string) map[string]string {
+	if rawMapping == nil || strings.TrimSpace(*rawMapping) == "" {
+		return nil
+	}
+
+	mapping := make(map[string]string)
+	if err := json.Unmarshal([]byte(*rawMapping), &mapping); err != nil {
+		return nil
+	}
+	return mapping
+}
+
+func resolveModelMappingTarget(modelName string, rawMapping *string) string {
+	return resolveModelMappingTargetWithMap(modelName, parseModelMapping(rawMapping))
+}
+
+func resolveModelMappingTargetWithMap(modelName string, mapping map[string]string) string {
+	if len(mapping) == 0 {
+		return modelName
+	}
+
+	current := modelName
+	visited := map[string]struct{}{current: {}}
+	for {
+		next := strings.TrimSpace(mapping[current])
+		if next == "" {
+			return current
+		}
+		if _, exists := visited[next]; exists {
+			return modelName
+		}
+		visited[next] = struct{}{}
+		current = next
+	}
+}
+
+// GetChannelModelForRequest converts an upstream model value back to the
+// configured channel model. Relay uses that configured name for quota and
+// pricing, then ModelMappedHelper applies the channel mapping before upstream.
+func GetChannelModelForRequest(channel *Channel, requestModel string) string {
+	if channel == nil || requestModel == "" {
+		return requestModel
+	}
+
+	mapping := parseModelMapping(channel.ModelMapping)
+	for _, configuredModel := range strings.Split(channel.Models, ",") {
+		configuredModel = strings.TrimSpace(configuredModel)
+		if configuredModel == "" {
+			continue
+		}
+		if resolveModelMappingTargetWithMap(configuredModel, mapping) == requestModel {
+			return configuredModel
+		}
+	}
+	return requestModel
 }
 
 func GetEnabledModels() []string {
@@ -148,6 +263,12 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(abilities) == 0 {
+		abilities, err = getMappedChannelAbilities(group, model, retry)
+		if err != nil {
+			return nil, err
+		}
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one
@@ -170,6 +291,50 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func getMappedChannelAbilities(group string, requestModel string, retry int) ([]Ability, error) {
+	var rows []modelMappingAbilityRow
+	err := schedulableAbilityQuery().
+		Select("abilities.*, channels.model_mapping").
+		Where(qualifiedAbilityGroupColumn()+" = ? and abilities.enabled = ?", group, true).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	matched := make([]Ability, 0, len(rows))
+	priorities := make(map[int64]struct{})
+	for _, row := range rows {
+		if resolveModelMappingTarget(row.Model, row.ModelMapping) != requestModel {
+			continue
+		}
+		matched = append(matched, row.Ability)
+		priorities[lo.FromPtr(row.Priority)] = struct{}{}
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+
+	orderedPriorities := make([]int64, 0, len(priorities))
+	for priority := range priorities {
+		orderedPriorities = append(orderedPriorities, priority)
+	}
+	sort.Slice(orderedPriorities, func(i, j int) bool {
+		return orderedPriorities[i] > orderedPriorities[j]
+	})
+	if retry >= len(orderedPriorities) {
+		retry = len(orderedPriorities) - 1
+	}
+	targetPriority := orderedPriorities[retry]
+
+	result := make([]Ability, 0, len(matched))
+	for _, ability := range matched {
+		if lo.FromPtr(ability.Priority) == targetPriority {
+			result = append(result, ability)
+		}
+	}
+	return result, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

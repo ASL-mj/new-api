@@ -4082,6 +4082,7 @@
     "新增菜单": "Add menu",
     "菜单名称": "Menu name",
     "菜单描述": "Menu description",
+    "搜索图标": "Search icons",
     "自定义菜单": "Custom menu",
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Enter a custom menu name and a valid http or https URL.",
     "确定删除这个自定义菜单吗？": "Delete this custom menu?",
@@ -4106,6 +4107,8 @@
     "探测失败": "Probe failed",
     "探测结果": "Probe result",
     "探测成功": "Probe succeeded",
-    "标准口径": "Standard basis"
+    "标准口径": "Standard basis",
+    "当前模型不属于该分组，请重新选择": "The current model is not available in this group. Please choose another model",
+    "系统默认": "System default"
   }
 }

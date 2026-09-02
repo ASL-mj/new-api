@@ -17,17 +17,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-export * from './history';
-export * from './auth';
-export * from './utils';
-export * from './base64';
-export * from './api';
-export * from './render';
-export * from './log';
-export * from './data';
-export * from './token';
-export * from './boolean';
-export * from './dashboard';
-export * from './passkey';
-export * from './statusCodeRules';
-export * from './lucide';
+import { iconNames } from 'lucide-react/dynamic';
+
+const LUCIDE_ICON_NAMES = [...iconNames].sort();
+const LUCIDE_ICON_NAME_SET = new Set(LUCIDE_ICON_NAMES);
+
+const toKebabCase = (value) =>
+  String(value || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+    .replace(/[\s_]+/g, '-')
+    .toLowerCase();
+
+export const normalizeLucideIconName = (value) => {
+  const iconName = toKebabCase(value);
+  return LUCIDE_ICON_NAME_SET.has(iconName) ? iconName : 'external-link';
+};
+
+export const getLucideIconNames = () => LUCIDE_ICON_NAMES;

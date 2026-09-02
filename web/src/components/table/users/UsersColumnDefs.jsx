@@ -363,7 +363,7 @@ export const getUsersColumns = ({
     {
       title: renderSortableHeader(
         t('剩余额度/总额度'),
-        'quota',
+        'total_quota',
         sortState,
         onSortToggle,
       ),

@@ -279,7 +279,7 @@ func ollamaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 }
 
 func FetchOllamaModels(baseURL, apiKey string) ([]OllamaModel, error) {
-	url := fmt.Sprintf("%s/api/tags", baseURL)
+	url := common.JoinBaseURLPath(baseURL, "/api/tags")
 
 	client := &http.Client{}
 	request, err := http.NewRequest("GET", url, nil)

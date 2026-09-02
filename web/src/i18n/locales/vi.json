@@ -4462,6 +4462,7 @@
     "新增菜单": "Thêm menu",
     "菜单名称": "Tên menu",
     "菜单描述": "Mô tả menu",
+    "搜索图标": "Tìm biểu tượng",
     "自定义菜单": "Menu tùy chỉnh",
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Nhập tên menu tùy chỉnh và URL http hoặc https hợp lệ.",
     "确定删除这个自定义菜单吗？": "Xóa menu tùy chỉnh này?",
@@ -4486,6 +4487,8 @@
     "探测失败": "Kiểm tra thất bại",
     "探测结果": "Kết quả kiểm tra",
     "探测成功": "Kiểm tra thành công",
-    "标准口径": "Chuẩn thống kê"
+    "标准口径": "Chuẩn thống kê",
+    "当前模型不属于该分组，请重新选择": "Mô hình hiện tại không thuộc nhóm này. Vui lòng chọn lại",
+    "系统默认": "Mặc định hệ thống"
   }
 }

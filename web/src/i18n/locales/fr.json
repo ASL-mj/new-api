@@ -3939,6 +3939,7 @@
     "新增菜单": "Ajouter un menu",
     "菜单名称": "Nom du menu",
     "菜单描述": "Description du menu",
+    "搜索图标": "Rechercher des icônes",
     "自定义菜单": "Menu personnalisé",
     "请完善自定义菜单名称，并填写有效的 http 或 https 链接": "Saisissez un nom de menu et une URL http ou https valide.",
     "确定删除这个自定义菜单吗？": "Supprimer ce menu personnalisé ?",
@@ -3963,6 +3964,8 @@
     "探测失败": "Échec de la sonde",
     "探测结果": "Résultat de la sonde",
     "探测成功": "Sonde réussie",
-    "标准口径": "Base standard"
+    "标准口径": "Base standard",
+    "当前模型不属于该分组，请重新选择": "Le modèle actuel n'est pas disponible dans ce groupe. Veuillez en choisir un autre",
+    "系统默认": "Valeur par défaut du système"
   }
 }

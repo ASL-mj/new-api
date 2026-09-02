@@ -144,6 +144,7 @@ const Playground = () => {
     setMessage,
     inputs,
     parameterEnabled,
+    models,
     sendRequest,
     saveMessagesImmediately,
   );
@@ -228,12 +229,19 @@ const Playground = () => {
         }
       }
 
-      return buildApiPayload(messages, null, inputs, parameterEnabled);
+      return buildApiPayload(messages, null, inputs, parameterEnabled, models);
     } catch (error) {
       console.error('构造预览请求体失败:', error);
       return null;
     }
-  }, [inputs, parameterEnabled, message, customRequestMode, customRequestBody]);
+  }, [
+    inputs,
+    parameterEnabled,
+    models,
+    message,
+    customRequestMode,
+    customRequestBody,
+  ]);
 
   // 发送消息
   function onMessageSend(content, attachment) {
@@ -287,6 +295,7 @@ const Playground = () => {
         null,
         inputs,
         parameterEnabled,
+        models,
       );
       sendRequest(payload, inputs.stream);
 

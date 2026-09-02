@@ -230,7 +230,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			endpoint := chItem.Endpoint
 			var fullURL string
 			if isOpenRouter {
-				fullURL = chItem.BaseURL + "/v1/models"
+				fullURL = common.JoinBaseURLPath(chItem.BaseURL, "/v1/models")
 			} else if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
 				fullURL = endpoint
 			} else {
@@ -239,7 +239,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				} else if !strings.HasPrefix(endpoint, "/") {
 					endpoint = "/" + endpoint
 				}
-				fullURL = chItem.BaseURL + endpoint
+				fullURL = common.JoinBaseURLPath(chItem.BaseURL, endpoint)
 			}
 			isModelsDev := isModelsDevAPIEndpoint(fullURL)
 

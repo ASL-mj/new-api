@@ -36,7 +36,6 @@ export let API = axios.create({
   },
 });
 
-
 function redirectToOAuthUrl(url, options = {}) {
   const { openInNewTab = false } = options;
   const targetUrl = typeof url === 'string' ? url : url.toString();
@@ -48,7 +47,6 @@ function redirectToOAuthUrl(url, options = {}) {
 
   window.location.assign(targetUrl);
 }
-
 
 function patchAPIInstance(instance) {
   const originalGet = instance.get.bind(instance);
@@ -114,6 +112,7 @@ export const buildApiPayload = (
   systemPrompt,
   inputs,
   parameterEnabled,
+  modelOptions = [],
 ) => {
   const processedMessages = messages
     .filter(isValidMessage)
@@ -129,11 +128,15 @@ export const buildApiPayload = (
   }
 
   const payload = {
-    model: inputs.model,
+    model: normalizeModelValue(inputs.model, modelOptions),
     group: inputs.group,
     messages: processedMessages,
     stream: inputs.stream,
   };
+
+  if (typeof inputs.reasoning_effort === 'string' && inputs.reasoning_effort) {
+    payload.reasoning_effort = inputs.reasoning_effort;
+  }
 
   // 添加启用的参数
   const parameterMappings = {
@@ -191,20 +194,56 @@ export const handleApiError = (error, response = null) => {
   return errorInfo;
 };
 
+export const normalizeModelValue = (model, modelOptions = []) => {
+  const modelValue = String(model ?? '').trim();
+  if (!modelValue || !Array.isArray(modelOptions)) {
+    return modelValue;
+  }
+
+  const options = modelOptions
+    .map((option) => {
+      if (typeof option === 'string') {
+        return { label: option, value: option };
+      }
+      return option && typeof option === 'object' ? option : null;
+    })
+    .filter(Boolean);
+  const valueMatch = options.find(
+    (option) => String(option.value ?? '').trim() === modelValue,
+  );
+  if (valueMatch) {
+    return String(valueMatch.value).trim();
+  }
+
+  const labelMatch = options.find(
+    (option) => String(option.label ?? '').trim() === modelValue,
+  );
+  return labelMatch ? String(labelMatch.value ?? '').trim() : modelValue;
+};
+
 // 处理模型数据
 export const processModelsData = (data, currentModel) => {
-  const modelOptions = data.map((model) => ({
-    label: model,
-    value: model,
-  }));
+  const modelOptions = (Array.isArray(data) ? data : [])
+    .map((model) => {
+      if (typeof model === 'string') {
+        return { label: model, value: model };
+      }
+      const value = String(model?.value ?? model?.id ?? '').trim();
+      const label = String(model?.label ?? model?.name ?? value).trim();
+      return value && label ? { label, value } : null;
+    })
+    .filter(Boolean);
 
-  const hasCurrentModel = modelOptions.some(
-    (option) => option.value === currentModel,
+  const normalizedCurrentModel = normalizeModelValue(
+    currentModel,
+    modelOptions,
   );
-  const selectedModel =
-    hasCurrentModel && modelOptions.length > 0
-      ? currentModel
-      : modelOptions[0]?.value;
+  const hasCurrentModel = modelOptions.some(
+    (option) => option.value === normalizedCurrentModel,
+  );
+  const selectedModel = hasCurrentModel
+    ? normalizedCurrentModel
+    : modelOptions[0]?.value;
 
   return { modelOptions, selectedModel };
 };

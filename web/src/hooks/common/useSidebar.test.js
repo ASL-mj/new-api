@@ -57,7 +57,7 @@ describe('custom external menu placement', () => {
         text: 'Status',
         itemKey: 'custom:topbar-link',
         to: '/external/topbar-link',
-        iconKey: 'external',
+        iconKey: 'external-link',
         requireAuth: true,
       },
     ]);
@@ -74,6 +74,43 @@ describe('custom external menu placement', () => {
         },
       ]),
     ).toMatchObject([{ placement: 'console' }]);
+  });
+
+  test('keeps configured Lucide icon names and falls back for old menus', () => {
+    expect(
+      normalizeSidebarCustomItems([
+        {
+          id: 'icon-link',
+          name: 'Icon link',
+          url: 'https://example.com',
+          placement: 'console',
+          icon: 'BookOpen',
+        },
+        {
+          id: 'legacy-link',
+          name: 'Legacy link',
+          url: 'https://legacy.example.com',
+          placement: 'console',
+        },
+      ]),
+    ).toMatchObject([{ icon: 'book-open' }, { icon: 'external-link' }]);
+
+    expect(
+      getCustomExternalMenuItems(
+        {
+          custom: [
+            {
+              id: 'icon-link',
+              name: 'Icon link',
+              url: 'https://example.com',
+              placement: 'console',
+              icon: 'BookOpen',
+            },
+          ],
+        },
+        'console',
+      ),
+    ).toMatchObject([{ iconKey: 'book-open' }]);
   });
 
   test('normalizes optional menu descriptions without exposing the source URL', () => {

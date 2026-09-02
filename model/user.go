@@ -294,8 +294,8 @@ func SearchUsers(keyword string, group string, startIdx int, num int, sortBy, so
 func userSortClause(sortBy, sortOrder string) string {
 	column := "id"
 	switch sortBy {
-	case "quota":
-		column = "quota"
+	case "total_quota":
+		column = "(quota + used_quota)"
 	case "aff_count":
 		column = "aff_count"
 	default:

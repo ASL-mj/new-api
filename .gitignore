@@ -22,6 +22,8 @@ tiktoken_cache
 web/bun.lock
 plans
 .claude
+.superpowers/
+new-api-deploy-*
 
 electron/node_modules
 electron/dist

@@ -259,12 +259,20 @@ func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
 	return interval
 }
 
+func getChannelSpecialBase(baseURL string) (constant.ChannelSpecialBase, bool) {
+	if plan, ok := constant.ChannelSpecialBases[baseURL]; ok {
+		return plan, true
+	}
+	normalizedBaseURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	plan, ok := constant.ChannelSpecialBases[normalizedBaseURL]
+	return plan, ok
+}
+
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
 	}
-
 	if channel.Type == constant.ChannelTypeOllama {
 		key := strings.TrimSpace(strings.Split(channel.Key, "\n")[0])
 		models, err := ollama.FetchOllamaModels(baseURL, key)
@@ -292,27 +300,27 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	var url string
 	switch channel.Type {
 	case constant.ChannelTypeAli:
-		url = fmt.Sprintf("%s/compatible-mode/v1/models", baseURL)
+		url = common.JoinBaseURLPath(baseURL, "/compatible-mode/v1/models")
 	case constant.ChannelTypeZhipu_v4:
-		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
-			url = fmt.Sprintf("%s/models", plan.OpenAIBaseURL)
+		if plan, ok := getChannelSpecialBase(baseURL); ok && plan.OpenAIBaseURL != "" {
+			url = common.JoinBaseURLPath(plan.OpenAIBaseURL, "/models")
 		} else {
-			url = fmt.Sprintf("%s/api/paas/v4/models", baseURL)
+			url = common.JoinBaseURLPath(baseURL, "/api/paas/v4/models")
 		}
 	case constant.ChannelTypeVolcEngine:
-		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
-			url = fmt.Sprintf("%s/v1/models", plan.OpenAIBaseURL)
+		if plan, ok := getChannelSpecialBase(baseURL); ok && plan.OpenAIBaseURL != "" {
+			url = common.JoinBaseURLPath(plan.OpenAIBaseURL, "/v1/models")
 		} else {
-			url = fmt.Sprintf("%s/v1/models", baseURL)
+			url = common.JoinBaseURLPath(baseURL, "/v1/models")
 		}
 	case constant.ChannelTypeMoonshot:
-		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
-			url = fmt.Sprintf("%s/models", plan.OpenAIBaseURL)
+		if plan, ok := getChannelSpecialBase(baseURL); ok && plan.OpenAIBaseURL != "" {
+			url = common.JoinBaseURLPath(plan.OpenAIBaseURL, "/models")
 		} else {
-			url = fmt.Sprintf("%s/v1/models", baseURL)
+			url = common.JoinBaseURLPath(baseURL, "/v1/models")
 		}
 	default:
-		url = fmt.Sprintf("%s/v1/models", baseURL)
+		url = common.JoinBaseURLPath(baseURL, "/v1/models")
 	}
 
 	key, _, apiErr := channel.GetNextEnabledKey()

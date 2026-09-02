@@ -19,9 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Card, Select, Typography, Button, Switch } from '@douyinfe/semi-ui';
-import { Sparkles, Users, ToggleLeft, X, Settings } from 'lucide-react';
+import { Sparkles, Users, ToggleLeft, X, Settings, Brain } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter } from '../../helpers';
+import {
+  normalizeModelValue,
+  renderGroupOption,
+  selectFilter,
+} from '../../helpers';
 import ParameterControl from './ParameterControl';
 import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
@@ -165,10 +169,40 @@ const SettingsPanel = ({
             selection
             filter={selectFilter}
             autoClearSearchValue={false}
-            onChange={(value) => onInputChange('model', value)}
+            onChange={(value) =>
+              onInputChange('model', normalizeModelValue(value, models))
+            }
             value={inputs.model}
             autoComplete='new-password'
             optionList={models}
+            style={{ width: '100%' }}
+            dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+            className='!rounded-lg'
+            disabled={customRequestMode}
+          />
+        </div>
+
+        {/* 推理强度 */}
+        <div className={customRequestMode ? 'opacity-50' : ''}>
+          <div className='flex items-center gap-2 mb-2'>
+            <Brain size={16} className='text-gray-500' />
+            <Typography.Text strong className='text-sm'>
+              {t('推理强度')}
+            </Typography.Text>
+          </div>
+          <Select
+            placeholder={t('系统默认')}
+            name='reasoning_effort'
+            value={inputs.reasoning_effort || ''}
+            onChange={(value) => onInputChange('reasoning_effort', value)}
+            optionList={[
+              { label: t('系统默认'), value: '' },
+              { label: 'none', value: 'none' },
+              { label: 'low', value: 'low' },
+              { label: 'medium', value: 'medium' },
+              { label: 'high', value: 'high' },
+              { label: 'xhigh', value: 'xhigh' },
+            ]}
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'

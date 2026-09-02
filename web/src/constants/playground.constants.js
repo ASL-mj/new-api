@@ -85,6 +85,7 @@ export const DEFAULT_CONFIG = {
   inputs: {
     model: 'gpt-4o',
     group: '',
+    reasoning_effort: '',
     temperature: 0.7,
     top_p: 1,
     max_tokens: 4096,

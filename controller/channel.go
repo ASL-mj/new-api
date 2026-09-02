@@ -1098,7 +1098,7 @@ func FetchModels(c *gin.Context) {
 	}
 
 	client := &http.Client{}
-	url := fmt.Sprintf("%s/v1/models", baseURL)
+	url := common.JoinBaseURLPath(baseURL, "/v1/models")
 
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {

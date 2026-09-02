@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Card,
@@ -31,7 +31,13 @@ import {
   Select,
   Popconfirm,
 } from '@douyinfe/semi-ui';
-import { API, showSuccess, showError } from '../../../helpers';
+import {
+  API,
+  showSuccess,
+  showError,
+  getLucideIcon,
+  getLucideIconNames,
+} from '../../../helpers';
 import { StatusContext } from '../../../context/Status';
 import {
   isSafeSidebarUrl,
@@ -44,6 +50,15 @@ export default function SettingsSidebarModulesAdmin(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [statusState, statusDispatch] = useContext(StatusContext);
+  const externalMenuIcons = useMemo(() => getLucideIconNames(), []);
+  const externalMenuIconOptions = useMemo(
+    () =>
+      externalMenuIcons.map((iconName) => ({
+        label: iconName,
+        value: iconName,
+      })),
+    [externalMenuIcons],
+  );
 
   // 左侧边栏模块管理状态（管理员全局控制）
   const [sidebarModulesAdmin, setSidebarModulesAdmin] = useState(() =>
@@ -87,6 +102,7 @@ export default function SettingsSidebarModulesAdmin(props) {
       enabled: true,
       placement: 'console',
       openMode: 'iframe',
+      icon: 'external-link',
     };
     setSidebarModulesAdmin((current) => ({
       ...current,
@@ -433,6 +449,43 @@ export default function SettingsSidebarModulesAdmin(props) {
                 placeholder='https://example.com'
                 onChange={(value) => updateCustomMenu(item.id, 'url', value)}
                 style={{ flex: '2 1 280px' }}
+              />
+              <Select
+                value={item.icon || 'external-link'}
+                onChange={(value) => updateCustomMenu(item.id, 'icon', value)}
+                style={{ flex: '1 1 220px', minWidth: '190px' }}
+                filter
+                searchPlaceholder={t('搜索图标')}
+                optionList={externalMenuIconOptions}
+                virtualize={{ itemSize: 34, height: 320 }}
+                maxHeight={320}
+                renderSelectedItem={(optionNode) => (
+                  <div className='flex items-center gap-2'>
+                    {getLucideIcon(optionNode?.value || 'external-link')}
+                    <span>{optionNode?.value || 'external-link'}</span>
+                  </div>
+                )}
+                renderOptionItem={({
+                  value,
+                  label,
+                  className,
+                  style,
+                  onClick,
+                  onMouseEnter,
+                }) => (
+                  <div
+                    className={className}
+                    style={style}
+                    onClick={onClick}
+                    onMouseEnter={onMouseEnter}
+                    role='option'
+                  >
+                    <div className='flex items-center gap-2'>
+                      {getLucideIcon(value)}
+                      <span>{label}</span>
+                    </div>
+                  </div>
+                )}
               />
               <Select
                 value={item.placement}

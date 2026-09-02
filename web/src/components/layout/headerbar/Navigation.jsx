@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Link } from 'react-router-dom';
 import SkeletonWrapper from '../components/SkeletonWrapper';
+import { getLucideIcon } from '../../../helpers';
 
 const Navigation = ({
   mainNavLinks,
@@ -37,7 +38,12 @@ const Navigation = ({
     const commonLinkClasses = `${baseClasses} ${spacingClasses} ${hoverClasses}`;
 
     return mainNavLinks.map((link) => {
-      const linkContent = <span>{link.text}</span>;
+      const linkContent = (
+        <span className='inline-flex items-center gap-1'>
+          {link.iconKey ? getLucideIcon(link.iconKey) : null}
+          <span>{link.text}</span>
+        </span>
+      );
 
       if (link.isExternal) {
         return (

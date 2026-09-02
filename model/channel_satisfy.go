@@ -58,6 +58,22 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 	err = DB.Model(&Ability{}).
 		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, normalized, channelID, true).
 		Count(&count).Error
+	if err == nil && count > 0 {
+		return true
+	}
+
+	var channel Channel
+	if err := DB.Select("id", "models", "model_mapping").First(&channel, "id = ?", channelID).Error; err != nil {
+		return false
+	}
+	configuredModel := GetChannelModelForRequest(&channel, modelName)
+	if configuredModel == modelName {
+		return false
+	}
+	count = 0
+	err = DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, configuredModel, channelID, true).
+		Count(&count).Error
 	return err == nil && count > 0
 }
 

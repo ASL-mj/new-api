@@ -74,7 +74,6 @@ import {
   Gift,
   User,
   Settings,
-  CircleUser,
   Package,
   Server,
   CalendarClock,
@@ -83,6 +82,8 @@ import {
   Gauge,
   ExternalLink,
 } from 'lucide-react';
+import { DynamicIcon } from 'lucide-react/dynamic';
+import { normalizeLucideIconName } from './lucide';
 import {
   SiAtlassian,
   SiAuth0,
@@ -163,7 +164,14 @@ export function getLucideIcon(key, selected = false) {
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
     default:
-      return <CircleUser {...commonProps} color={iconColor} />;
+      return (
+        <DynamicIcon
+          name={normalizeLucideIconName(key)}
+          fallback={() => <ExternalLink {...commonProps} color={iconColor} />}
+          {...commonProps}
+          color={iconColor}
+        />
+      );
   }
 }
 

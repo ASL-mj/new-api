@@ -515,6 +515,19 @@ func generateDefaultSidebarConfig(userRole int) string {
 	return string(configBytes)
 }
 
+func getUserModelGroups(userGroup, requestedGroup string, groups map[string]string) []string {
+	if requestedGroup == "" {
+		return nil
+	}
+	if _, ok := groups[requestedGroup]; !ok {
+		return []string{}
+	}
+	if requestedGroup == "auto" {
+		return service.GetUserAutoGroup(userGroup)
+	}
+	return []string{requestedGroup}
+}
+
 func GetUserModels(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -526,11 +539,37 @@ func GetUserModels(c *gin.Context) {
 		return
 	}
 	groups := service.GetUserUsableGroups(user.Group)
-	var models []string
-	for group := range groups {
-		for _, g := range model.GetGroupEnabledModels(group) {
-			if !common.StringsContains(models, g) {
-				models = append(models, g)
+	requestedGroup := strings.TrimSpace(c.Query("group"))
+	modelGroups := make([]string, 0)
+	if requestedGroup != "" {
+		modelGroups = getUserModelGroups(user.Group, requestedGroup, groups)
+	} else {
+		for group := range groups {
+			modelGroups = append(modelGroups, group)
+		}
+	}
+
+	// Existing consumers keep receiving a string array. The playground opts in
+	// to mapping-aware labels while preserving the public request model value.
+	if c.Query("include_mapping") == "true" {
+		options, err := model.GetGroupModelOptions(modelGroups)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data":    options,
+		})
+		return
+	}
+
+	models := make([]string, 0)
+	for _, group := range modelGroups {
+		for _, groupModel := range model.GetGroupEnabledModels(group) {
+			if !common.StringsContains(models, groupModel) {
+				models = append(models, groupModel)
 			}
 		}
 	}

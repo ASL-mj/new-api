@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { normalizeLucideIconName } from './lucide';
+
 const CUSTOM_PLACEMENTS = new Set([
   'topbar',
   'chat',
@@ -38,6 +40,7 @@ export const normalizeSidebarCustomItems = (items) => {
     name: String(item?.name || '').trim(),
     description: String(item?.description || '').trim(),
     url: String(item?.url || '').trim(),
+    icon: normalizeLucideIconName(item?.icon),
     enabled: item?.enabled !== false,
     // Keep menus created by the first implementation visible, but place them
     // in an existing sidebar section instead of creating a fifth section.
@@ -114,10 +117,10 @@ export const getCustomExternalMenuItems = (
     .map((item) => ({
       text: item.name,
       itemKey: `custom:${item.id}`,
+      iconKey: item.icon,
       to:
         placement === 'topbar'
           ? `/external/${encodeURIComponent(item.id)}`
           : `/console/external/${encodeURIComponent(item.id)}`,
-      iconKey: 'external',
       requireAuth: true,
     }));

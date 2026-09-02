@@ -43,13 +43,18 @@ func InitChannelCache() {
 			continue // skip disabled channels
 		}
 		groups := strings.Split(channel.Group, ",")
+		mapping := parseModelMapping(channel.ModelMapping)
 		for _, group := range groups {
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
+				model = strings.TrimSpace(model)
+				addChannelModelIndex(newGroup2model2channels, group, model, channel.Id)
+				addChannelModelIndex(
+					newGroup2model2channels,
+					group,
+					resolveModelMappingTargetWithMap(model, mapping),
+					channel.Id,
+				)
 			}
 		}
 	}
@@ -83,6 +88,22 @@ func InitChannelCache() {
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
+}
+
+func addChannelModelIndex(index map[string]map[string][]int, group string, model string, channelID int) {
+	if model == "" {
+		return
+	}
+	if _, ok := index[group]; !ok {
+		index[group] = make(map[string][]int)
+	}
+	channels := index[group][model]
+	for _, id := range channels {
+		if id == channelID {
+			return
+		}
+	}
+	index[group][model] = append(channels, channelID)
 }
 
 func SyncChannelCache(frequency int) {

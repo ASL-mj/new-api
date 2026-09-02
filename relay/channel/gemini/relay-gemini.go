@@ -1608,7 +1608,7 @@ func FetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 	maxPages := 100 // Safety limit to prevent infinite loops
 
 	for page := 0; page < maxPages; page++ {
-		url := fmt.Sprintf("%s/v1beta/models", baseURL)
+		url := common.JoinBaseURLPath(baseURL, "/v1beta/models")
 		if nextPageToken != "" {
 			url = fmt.Sprintf("%s?pageToken=%s", url, nextPageToken)
 		}
