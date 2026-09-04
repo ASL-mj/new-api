@@ -281,7 +281,7 @@ const OtherSetting = () => {
 
       // Option 2: Use the JSON proxy approach which often works better with GitHub API
       const res = await fetch(
-        'https://api.github.com/repos/Calcium-Ion/new-api/releases/latest',
+        'https://api.github.com/repos/ASL-mj/new-api/releases/latest',
         {
           headers: {
             Accept: 'application/json',
@@ -297,6 +297,11 @@ const OtherSetting = () => {
       // const res = await API.get('/api/status/github-latest-release');
 
       const { tag_name, body } = res;
+      if (!tag_name) {
+        // GitHub 对没有 Release 的仓库返回 404
+        showError('本仓库尚未发布 Release，无法检查更新');
+        return;
+      }
       if (tag_name === statusState?.status?.version) {
         showSuccess(`已是最新版本：${tag_name}`);
       } else {
