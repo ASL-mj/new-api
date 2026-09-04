@@ -17,31 +17,45 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { describe, expect, test } from 'bun:test';
-import {
-  buildApiPayload,
-  normalizeModelValue,
-  processModelsData,
-} from '../api';
+import { describe, expect, test, mock } from 'bun:test';
+
+// api.js 间接引入 Semi UI 与 utils.jsx，lottie-web 和 window.matchMedia
+// 都在模块加载期访问浏览器 API；bun test 没有 DOM，先打桩避免加载报错。
+mock.module('lottie-web', () => ({ default: {} }));
+const storageStub = () => {
+  const store = new Map();
+  return {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+    clear: () => store.clear(),
+  };
+};
+globalThis.window ??= {
+  matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  location: { href: 'http://localhost/' },
+  navigator: { userAgent: 'bun-test' },
+  btoa: (input) => globalThis.btoa(input),
+  atob: (input) => globalThis.atob(input),
+};
+globalThis.localStorage ??= storageStub();
+
+const { buildApiPayload, processModelsData } = await import('../api');
 
 describe('playground model and reasoning payloads', () => {
-  test('keeps model value separate from its display label', () => {
-    const { modelOptions, selectedModel } = processModelsData(
-      [{ label: 'Mapped name', value: 'origin-id' }],
-      'origin-id',
+  test('sends the selected model as-is without mapping', () => {
+    const payload = buildApiPayload(
+      [],
+      '',
+      {
+        model: 'gpt-4o',
+        group: 'default',
+        stream: true,
+      },
+      {},
     );
 
-    expect(modelOptions).toEqual([
-      { label: 'Mapped name', value: 'origin-id' },
-    ]);
-    expect(selectedModel).toBe('origin-id');
-  });
-
-  test('converts a legacy display label back to the public model value', () => {
-    const options = [{ label: 'hy3', value: 'b/hy3' }];
-
-    expect(normalizeModelValue('hy3', options)).toBe('b/hy3');
-    expect(processModelsData(options, 'hy3').selectedModel).toBe('b/hy3');
+    expect(payload.model).toBe('gpt-4o');
   });
 
   test('selects the first model when the current model is unavailable', () => {
@@ -70,22 +84,6 @@ describe('playground model and reasoning payloads', () => {
       model: 'origin-id',
       reasoning_effort: 'xhigh',
     });
-  });
-
-  test('normalizes the model in the final request payload', () => {
-    const payload = buildApiPayload(
-      [],
-      '',
-      {
-        model: 'hy3',
-        group: 'auto',
-        stream: true,
-      },
-      {},
-      [{ label: 'hy3', value: 'b/hy3' }],
-    );
-
-    expect(payload.model).toBe('b/hy3');
   });
 
   test('omits the system-default reasoning effort', () => {

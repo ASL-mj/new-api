@@ -31,7 +31,6 @@ export const useMessageEdit = (
   setMessage,
   inputs,
   parameterEnabled,
-  models,
   sendRequest,
   saveMessages,
 ) => {
@@ -103,7 +102,6 @@ export const useMessageEdit = (
                   null,
                   inputs,
                   parameterEnabled,
-                  models,
                 );
                 setMessage((prevMsg) => [
                   ...prevMsg,
@@ -137,7 +135,6 @@ export const useMessageEdit = (
     t,
     inputs,
     parameterEnabled,
-    models,
     sendRequest,
     setMessage,
     saveMessages,

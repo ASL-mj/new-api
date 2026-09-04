@@ -48,7 +48,6 @@ export const useDataLoader = (
     try {
       const res = await API.get(API_ENDPOINTS.USER_MODELS, {
         params: {
-          include_mapping: true,
           ...(requestedGroup ? { group: requestedGroup } : {}),
         },
       });

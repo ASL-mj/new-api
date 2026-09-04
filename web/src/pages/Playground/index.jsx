@@ -144,7 +144,6 @@ const Playground = () => {
     setMessage,
     inputs,
     parameterEnabled,
-    models,
     sendRequest,
     saveMessagesImmediately,
   );
@@ -229,7 +228,7 @@ const Playground = () => {
         }
       }
 
-      return buildApiPayload(messages, null, inputs, parameterEnabled, models);
+      return buildApiPayload(messages, null, inputs, parameterEnabled);
     } catch (error) {
       console.error('构造预览请求体失败:', error);
       return null;
@@ -237,7 +236,6 @@ const Playground = () => {
   }, [
     inputs,
     parameterEnabled,
-    models,
     message,
     customRequestMode,
     customRequestBody,
@@ -295,7 +293,6 @@ const Playground = () => {
         null,
         inputs,
         parameterEnabled,
-        models,
       );
       sendRequest(payload, inputs.stream);
 

@@ -549,22 +549,6 @@ func GetUserModels(c *gin.Context) {
 		}
 	}
 
-	// Existing consumers keep receiving a string array. The playground opts in
-	// to mapping-aware labels while preserving the public request model value.
-	if c.Query("include_mapping") == "true" {
-		options, err := model.GetGroupModelOptions(modelGroups)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "",
-			"data":    options,
-		})
-		return
-	}
-
 	models := make([]string, 0)
 	for _, group := range modelGroups {
 		for _, groupModel := range model.GetGroupEnabledModels(group) {

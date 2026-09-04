@@ -21,11 +21,7 @@ import React from 'react';
 import { Card, Select, Typography, Button, Switch } from '@douyinfe/semi-ui';
 import { Sparkles, Users, ToggleLeft, X, Settings, Brain } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import {
-  normalizeModelValue,
-  renderGroupOption,
-  selectFilter,
-} from '../../helpers';
+import { renderGroupOption, selectFilter } from '../../helpers';
 import ParameterControl from './ParameterControl';
 import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
@@ -169,9 +165,7 @@ const SettingsPanel = ({
             selection
             filter={selectFilter}
             autoClearSearchValue={false}
-            onChange={(value) =>
-              onInputChange('model', normalizeModelValue(value, models))
-            }
+            onChange={(value) => onInputChange('model', value)}
             value={inputs.model}
             autoComplete='new-password'
             optionList={models}
