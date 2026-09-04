@@ -116,6 +116,225 @@ export const isAdminQuotaAdjustmentLog = (record) =>
 const getAdminQuotaAdjustmentContent = (content) =>
   String(content || '').replace(/^管理员(?=增加|减少|覆盖)/, '已');
 
+const getLogType = (record) => Number(record?.type);
+
+const hasRecordedValue = (value) =>
+  value !== undefined && value !== null && value !== '' && value !== '-';
+
+const overviewItem = (label, value, options = {}) =>
+  hasRecordedValue(value) ? { label, value: String(value), ...options } : null;
+
+const compactChannelName = (record) => {
+  if (hasRecordedValue(record?.channel_name)) {
+    return record.channel_name;
+  }
+  if (hasRecordedValue(record?.channel)) {
+    return `#${record.channel}`;
+  }
+  return '';
+};
+
+const getDetailKind = (record, isQuotaAdjustment, isMonitorProbe) => {
+  if (isQuotaAdjustment) {
+    return 'quota-adjustment';
+  }
+  if (isMonitorProbe) {
+    return 'probe';
+  }
+  switch (getLogType(record)) {
+    case 1:
+      return 'topup';
+    case 2:
+      return 'consume';
+    case 3:
+      return 'management';
+    case 4:
+      return 'system';
+    case 5:
+      return 'error';
+    case 6:
+      return 'refund';
+    default:
+      return 'legacy';
+  }
+};
+
+const getDetailMeta = (kind, t) => {
+  const metadata = {
+    'quota-adjustment': {
+      label: t('管理'),
+      title: t('管理操作详情'),
+      eventTitle: null,
+    },
+    consume: { label: t('消耗'), title: t('消耗详情'), eventTitle: null },
+    error: {
+      label: t('请求错误'),
+      title: t('请求错误详情'),
+      eventTitle: null,
+    },
+    topup: { label: t('充值'), title: t('充值详情'), eventTitle: t('充值信息') },
+    management: {
+      label: t('管理'),
+      title: t('管理操作详情'),
+      eventTitle: t('管理操作'),
+    },
+    system: {
+      label: t('系统'),
+      title: t('系统事件详情'),
+      eventTitle: t('系统事件'),
+    },
+    probe: { label: t('探测'), title: t('探测详情'), eventTitle: null },
+    refund: { label: t('退款'), title: t('退款详情'), eventTitle: t('退款信息') },
+    legacy: {
+      label: t('历史记录'),
+      title: t('历史记录详情'),
+      eventTitle: t('历史内容'),
+    },
+  };
+  return metadata[kind] || metadata.legacy;
+};
+
+const buildOverviewItems = ({
+  kind,
+  record,
+  createdAt,
+  requestId,
+  group,
+  tokenName,
+  modelName,
+  upstreamModelName,
+  reasoningEffort,
+  useTime,
+  requestPath,
+  t,
+}) => {
+  const channelName = compactChannelName(record);
+  const ip = record?.ip || '';
+  const requestItem = overviewItem(t('请求 ID'), requestId, {
+    copyable: true,
+    mono: true,
+    requestId: true,
+  });
+  const ipItem = overviewItem(t('IP'), ip, { copyable: true, mono: true });
+  const timeItem = overviewItem(t('时间'), createdAt, { mono: true });
+  const channelItem = overviewItem(t('渠道'), channelName, { mono: true });
+  const pathItem = overviewItem(t('请求路径'), requestPath, {
+    copyable: true,
+    mono: true,
+  });
+  const responseTimeItem =
+    useTime > 0
+      ? overviewItem(t('响应时间'), `${useTime.toFixed(1)}s`, {
+          mono: true,
+          tone: 'success',
+        })
+      : null;
+
+  if (kind === 'consume' || kind === 'probe') {
+    return [
+      requestItem,
+      overviewItem(t('分组'), group, { mono: true }),
+      overviewItem(t('令牌'), tokenName, { mono: true }),
+      overviewItem(t('调用模型'), modelName, {
+        mono: true,
+        subValue: upstreamModelName ? `→ ${upstreamModelName}` : null,
+      }),
+      overviewItem(t('推理强度'), reasoningEffort),
+      responseTimeItem,
+      channelItem,
+      ipItem,
+      pathItem,
+    ].filter(Boolean);
+  }
+
+  if (kind === 'error') {
+    return [
+      requestItem,
+      overviewItem(t('分组'), group, { mono: true }),
+      channelItem,
+      overviewItem(t('调用模型'), modelName, {
+        mono: true,
+        subValue: upstreamModelName ? `→ ${upstreamModelName}` : null,
+      }),
+      overviewItem(t('令牌'), tokenName, { mono: true }),
+      responseTimeItem,
+      ipItem,
+      pathItem,
+    ].filter(Boolean);
+  }
+
+  return [
+    timeItem,
+    overviewItem(t('用户'), record?.username || '', { mono: true }),
+    ipItem,
+    overviewItem(t('日志 ID'), record?.id, { mono: true }),
+  ].filter(Boolean);
+};
+
+const buildEventRows = (kind, record, other, t) => {
+  const adminInfo =
+    other?.admin_info && typeof other.admin_info === 'object'
+      ? other.admin_info
+      : {};
+  const rows = [];
+  const append = (label, value, options = {}) => {
+    const item = overviewItem(label, value, options);
+    if (item) {
+      rows.push(item);
+    }
+  };
+
+  if (kind === 'topup' || kind === 'refund') {
+    if (Number(record?.quota) !== 0) {
+      append(t('额度变化'), renderQuota(record.quota, 6), { mono: true });
+    }
+    append(t('任务 ID'), other?.task_id, { mono: true, copyable: true });
+    append(t('订单支付方式'), adminInfo.payment_method);
+    append(t('回调支付方式'), adminInfo.callback_payment_method);
+    append(t('回调调用者IP'), adminInfo.caller_ip, {
+      mono: true,
+      copyable: true,
+    });
+    append(t('失败原因'), other?.reason);
+  }
+
+  if (kind === 'management') {
+    const operator = adminInfo.admin_username
+      ? adminInfo.admin_id
+        ? `${adminInfo.admin_username} (ID: ${adminInfo.admin_id})`
+        : adminInfo.admin_username
+      : adminInfo.admin_id
+        ? `ID: ${adminInfo.admin_id}`
+        : '';
+    append(t('操作管理员'), operator);
+  }
+
+  if (kind === 'system') {
+    append(t('事件 ID'), other?.event_id, { mono: true, copyable: true });
+  }
+
+  if (kind === 'legacy') {
+    append(t('日志类型'), record?.type, { mono: true });
+  }
+
+  return rows;
+};
+
+const buildErrorDetail = (record, other) => {
+  const statusCode = other?.status_code ?? other?.upstream_status_code ?? null;
+  const errorMessage =
+    other?.error_message || other?.message || String(record?.content || '');
+
+  return {
+    statusCode,
+    errorCode: other?.error_code || null,
+    errorType: other?.error_type || null,
+    stage: other?.error_stage || null,
+    transportError: other?.transport_error || null,
+    errorMessage: errorMessage || null,
+  };
+};
+
 // 标准倍率计费：model_ratio * 2 = $X / 1M tokens（与 renderModelPrice 口径一致）
 const buildStandardBillingItems = (record, other, t) => {
   const modelRatio = toNum(other.model_ratio);
@@ -341,6 +560,8 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
   const { extraRows, findRow } = splitExpandRows(expandRows, t);
   const isQuotaAdjustment = isAdminQuotaAdjustmentLog(record);
   const isMonitorProbe = isMonitorProbeLog(record);
+  const kind = getDetailKind(record, isQuotaAdjustment, isMonitorProbe);
+  const meta = getDetailMeta(kind, t);
   const probeStatus = String(
     other.probe_status ||
       (record.content === '渠道探测成功' ? 'success' : 'failed'),
@@ -387,18 +608,27 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
         billingScope: other.billing_scope || null,
       }
     : null;
+  const error = kind === 'error' ? buildErrorDetail(record, other) : null;
+  const createdAt =
+    record.timestamp2string || formatTimestamp(record.created_at);
+  const requestPath = other.request_path || null;
+  const showUsage = ['consume', 'probe'].includes(kind);
+  const showBilling = ['consume', 'probe'].includes(kind);
+  const event = meta.eventTitle
+    ? {
+        title: meta.eventTitle,
+        content: record.content || t('未记录'),
+        rows: buildEventRows(kind, record, other, t),
+      }
+    : null;
 
   return {
     id: record.id,
     type: record.type,
-    typeLabel: isQuotaAdjustment
-      ? t('管理')
-      : isMonitorProbe
-        ? t('探测')
-        : record.type === 2
-          ? t('消耗')
-          : t('记录'),
-    createdAt: record.timestamp2string || formatTimestamp(record.created_at),
+    kind,
+    typeLabel: meta.label,
+    title: meta.title,
+    createdAt,
     requestId: record.request_id || '',
     group: record.group || other.group || '-',
     tokenName: record.token_name || '-',
@@ -423,12 +653,32 @@ export function buildUsageLogDetail({ record, expandRows, t }) {
     billing: buildBilling(record, other, t),
     billingProcess: billingProcessRow ? billingProcessRow.value : null,
     probe,
+    error,
+    event,
+    showUsage,
+    showBilling,
+    billingTitle: kind === 'probe' ? t('标准口径参考') : t('计费详情'),
+    usageTitle: kind === 'probe' ? t('探测用量') : t('消耗明细'),
+    overviewItems: buildOverviewItems({
+      kind,
+      record,
+      createdAt,
+      requestId: record.request_id || '',
+      group: record.group || other.group || '',
+      tokenName: record.token_name || '',
+      modelName: record.model_name || '',
+      reasoningEffort: other.reasoning_effort || null,
+      upstreamModelName: isModelMapped ? other.upstream_model_name : null,
+      useTime,
+      requestPath,
+      t,
+    }),
     violation: isViolationFeeLog(other)
       ? {
           feeText: renderQuota(other?.fee_quota ?? record?.quota ?? 0, 6),
         }
       : null,
-    requestPath: other.request_path || null,
+    requestPath,
     nativeContent: findRow('日志详情')?.value || null,
     contentText: isQuotaAdjustment
       ? getAdminQuotaAdjustmentContent(record.content)

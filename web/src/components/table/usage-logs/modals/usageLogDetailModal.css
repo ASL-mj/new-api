@@ -202,6 +202,19 @@ body[theme-mode='dark'] .uldm-dialog {
   border-bottom: 0;
 }
 
+.uldm-overview--request-id-full .uldm-kv:nth-child(n) {
+  border-right: 1px solid var(--uldm-line);
+}
+
+.uldm-overview--request-id-full .uldm-kv--full {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+
+.uldm-overview--request-id-full .uldm-kv:nth-child(2n + 1) {
+  border-right: 0;
+}
+
 .uldm-kv-label {
   color: var(--uldm-ink-soft);
   font-size: 11px;
@@ -213,6 +226,33 @@ body[theme-mode='dark'] .uldm-dialog {
   overflow-wrap: anywhere;
   font-weight: 700;
   font-size: 12px;
+}
+
+.uldm-inline-copy {
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  background: transparent;
+  border: 0;
+  cursor: copy;
+}
+
+.uldm-inline-copy:hover {
+  color: var(--uldm-blue-deep);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.uldm-sub-value {
+  display: block;
+  margin-top: 3px;
+  color: var(--uldm-blue-deep);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .uldm-mono {
@@ -236,6 +276,50 @@ body[theme-mode='dark'] .uldm-dialog {
   color: var(--uldm-ink-soft);
   font-size: 11px;
   font-weight: 500;
+}
+
+.uldm-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--uldm-line);
+}
+
+.uldm-detail-cell {
+  display: grid;
+  gap: 5px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--uldm-line);
+  border-bottom: 1px solid var(--uldm-line);
+}
+
+.uldm-detail-cell:nth-child(2n) {
+  border-right: 0;
+}
+
+.uldm-detail-cell:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.uldm-detail-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.uldm-error-message {
+  display: grid;
+  gap: 5px;
+  color: var(--uldm-ink);
+  border-top: 1px solid var(--uldm-line);
+  background: color-mix(in srgb, var(--uldm-orange) 8%, transparent);
+}
+
+.uldm-event-content {
+  display: grid;
+  gap: 5px;
+  border-bottom: 1px solid var(--uldm-line);
 }
 
 /* 分区 */
@@ -552,11 +636,30 @@ body[theme-mode='dark'] .uldm-dialog {
 }
 
 @media (max-width: 720px) {
+  .uldm-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .uldm-detail-cell,
+  .uldm-detail-cell:nth-child(2n),
+  .uldm-detail-cell:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--uldm-line);
+  }
+
+  .uldm-detail-cell:last-child {
+    border-bottom: 0;
+  }
+
   .uldm-overview {
     grid-template-columns: 1fr;
   }
 
   .uldm-kv {
+    border-right: 0;
+  }
+
+  .uldm-overview--request-id-full .uldm-kv:nth-child(n) {
     border-right: 0;
   }
 

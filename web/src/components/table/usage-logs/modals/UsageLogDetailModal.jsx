@@ -55,6 +55,113 @@ const AdminQuotaDetail = ({ detail, t, onCopy }) => (
   </div>
 );
 
+const DetailOverview = ({ items, onCopy }) => {
+  const requestIdOwnRow =
+    items.length % 2 === 1 && items.some((item) => item.requestId);
+
+  return (
+    <section
+      className={`uldm-overview ${requestIdOwnRow ? 'uldm-overview--request-id-full' : ''}`}
+    >
+      {items.map((item) => (
+        <div
+          className={`uldm-kv ${requestIdOwnRow && item.requestId ? 'uldm-kv--full' : ''}`}
+          key={item.label}
+        >
+          <span className='uldm-kv-label'>{item.label}</span>
+          <span
+            className={`uldm-kv-value ${item.mono ? 'uldm-mono' : ''} ${item.tone === 'success' ? 'uldm-success' : ''}`}
+          >
+            {item.copyable ? (
+              <button
+                type='button'
+                className='uldm-inline-copy'
+                onClick={(event) => onCopy(event, item.value)}
+                title={item.value}
+              >
+                {item.value}
+              </button>
+            ) : (
+              item.value
+            )}
+            {item.subValue && (
+              <small className='uldm-sub-value'>{item.subValue}</small>
+            )}
+          </span>
+        </div>
+      ))}
+    </section>
+  );
+};
+
+const ErrorDetail = ({ error, t }) => {
+  const rows = [
+    [t('HTTP 状态码'), error.statusCode],
+    [t('错误码'), error.errorCode],
+    [t('错误类型'), error.errorType],
+    [t('链路阶段'), error.stage],
+    [t('传输错误'), error.transportError],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== '');
+
+  return (
+    <section className='uldm-section'>
+      <div className='uldm-section-head'>
+        <h3 className='uldm-section-title'>{t('请求结果')}</h3>
+        <strong className='uldm-error'>✗ {t('请求失败')}</strong>
+      </div>
+      {rows.length > 0 && (
+        <div className='uldm-detail-grid'>
+          {rows.map(([label, value]) => (
+            <div className='uldm-detail-cell' key={label}>
+              <span className='uldm-kv-label'>{label}</span>
+              <strong className='uldm-detail-value'>{value}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+      {error.errorMessage && (
+        <div className='uldm-process uldm-error-message'>
+          <span className='uldm-kv-label'>{t('错误信息')}</span>
+          <div>{error.errorMessage}</div>
+        </div>
+      )}
+    </section>
+  );
+};
+
+const EventDetail = ({ event, t, onCopy }) => (
+  <section className='uldm-section'>
+    <div className='uldm-section-head'>
+      <h3 className='uldm-section-title'>{event.title}</h3>
+    </div>
+    <div className='uldm-process uldm-event-content'>
+      <span className='uldm-kv-label'>{t('操作内容')}</span>
+      <div>{event.content}</div>
+    </div>
+    {event.rows.length > 0 && (
+      <div className='uldm-detail-grid'>
+        {event.rows.map((row) => (
+          <div className='uldm-detail-cell' key={row.label}>
+            <span className='uldm-kv-label'>{row.label}</span>
+            {row.copyable ? (
+              <button
+                type='button'
+                className={`uldm-inline-copy ${row.mono ? 'uldm-mono' : ''}`}
+                onClick={(event) => onCopy(event, row.value)}
+                title={row.value}
+              >
+                {row.value}
+              </button>
+            ) : (
+              <strong className='uldm-detail-value'>{row.value}</strong>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+  </section>
+);
+
 const UsageLogDetailModal = ({
   showLogDetail,
   closeLogDetail,
@@ -118,7 +225,7 @@ const UsageLogDetailModal = ({
               </span>
               <span className='uldm-consume-tag'>{detail.typeLabel}</span>
             </div>
-            <h2 className='uldm-title'>{t('消耗详情')}</h2>
+            <h2 className='uldm-title'>{detail.title}</h2>
             <button
               className='uldm-close'
               aria-label={t('关闭')}
@@ -132,82 +239,18 @@ const UsageLogDetailModal = ({
             <AdminQuotaDetail detail={detail} t={t} onCopy={handleCopy} />
           ) : (
             <div className='uldm-body'>
-              {/* 请求概览：六个字段固定为三行两列，请求 ID 与分组同一行 */}
-              <section className='uldm-overview'>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('请求 ID')}</span>
-                  <span className='uldm-kv-value uldm-mono'>
-                    {detail.requestId ? (
-                      <span
-                        title={detail.requestId}
-                        onClick={(event) => handleCopy(event, detail.requestId)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        {detail.requestId}
-                      </span>
-                    ) : (
-                      '-'
-                    )}
-                  </span>
-                </div>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('分组')}</span>
-                  <span className='uldm-kv-value uldm-mono'>
-                    {detail.group}
-                  </span>
-                </div>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('令牌')}</span>
-                  <span className='uldm-kv-value uldm-mono'>
-                    {detail.tokenName}
-                  </span>
-                </div>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('调用模型')}</span>
-                  <span className='uldm-kv-value uldm-mono'>
-                    {detail.modelName}
-                    {detail.upstreamModelName && (
-                      <Tooltip
-                        content={`${t('实际模型')}：${detail.upstreamModelName}`}
-                      >
-                        <span
-                          className='uldm-accent'
-                          style={{ marginLeft: 6, fontSize: 11 }}
-                        >
-                          → {detail.upstreamModelName}
-                        </span>
-                      </Tooltip>
-                    )}
-                  </span>
-                </div>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('推理强度')}</span>
-                  <span
-                    className={`uldm-kv-value ${detail.reasoningEffort ? 'uldm-accent' : ''}`}
-                  >
-                    {detail.reasoningEffort || '-'}
-                  </span>
-                </div>
-                <div className='uldm-kv'>
-                  <span className='uldm-kv-label'>{t('响应时间')}</span>
-                  <span className='uldm-kv-value uldm-success uldm-mono'>
-                    {detail.useTime.toFixed(1)}s
-                    {detail.frtSeconds != null && (
-                      <small className='uldm-frt'>
-                        {' '}
-                        (FRT: {detail.frtSeconds}s)
-                      </small>
-                    )}
-                    {detail.speed > 0 && (
-                      <small className='uldm-frt'>
-                        {' '}
-                        · {detail.isStream ? t('流') : t('非流')} {detail.speed}{' '}
-                        t/s
-                      </small>
-                    )}
-                  </span>
-                </div>
-              </section>
+              <DetailOverview
+                items={detail.overviewItems}
+                onCopy={handleCopy}
+              />
+
+              {detail.error && (
+                <ErrorDetail error={detail.error} t={t} />
+              )}
+
+              {detail.event && (
+                <EventDetail event={detail.event} t={t} onCopy={handleCopy} />
+              )}
 
               {detail.probe && (
                 <section className='uldm-section'>
@@ -252,10 +295,10 @@ const UsageLogDetailModal = ({
                 </section>
               )}
 
-              {/* 消耗明细：输入 / 输出 / 缓存读取 / 总 Token 一行四项 */}
-              <section className='uldm-section'>
+              {detail.showUsage && (
+                <section className='uldm-section'>
                 <div className='uldm-section-head'>
-                  <h3 className='uldm-section-title'>{t('消耗明细')}</h3>
+                  <h3 className='uldm-section-title'>{detail.usageTitle}</h3>
                   <div className='uldm-section-tools'>
                     {detail.requestPath && (
                       <>
@@ -325,12 +368,13 @@ const UsageLogDetailModal = ({
                     {detail.nativeContent}
                   </div>
                 )}
-              </section>
+                </section>
+              )}
 
-              {/* 计费详情 */}
-              <section className='uldm-section'>
+              {detail.showBilling && (
+                <section className='uldm-section'>
                 <div className='uldm-section-head'>
-                  <h3 className='uldm-section-title'>{t('计费详情')}</h3>
+                  <h3 className='uldm-section-title'>{detail.billingTitle}</h3>
                   {detail.billing && (
                     <div className='uldm-billing-meta'>
                       <span>
@@ -380,7 +424,9 @@ const UsageLogDetailModal = ({
                       </div>
                       <div className='uldm-final'>
                         <span className='uldm-total-label'>
-                          {t('最终扣费')}
+                          {detail.kind === 'probe'
+                            ? t('标准口径消耗')
+                            : t('最终扣费')}
                         </span>
                         <strong className='uldm-total-equation'>
                           {detail.billing.finalText}
@@ -403,7 +449,8 @@ const UsageLogDetailModal = ({
                       : detail.contentText || t('暂无计费过程数据')}
                   </div>
                 )}
-              </section>
+                </section>
+              )}
 
               {/* 其他扩展信息：默认折叠，点击展开 */}
               {detail.extraRows.length > 0 && (

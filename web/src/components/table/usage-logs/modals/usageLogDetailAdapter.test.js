@@ -358,4 +358,65 @@ describe('usage log detail adapter', () => {
       '探测失败 · bad_response',
     );
   });
+
+  test('keeps error records limited to request information and results', () => {
+    const record = {
+      ...baseLog,
+      type: 5,
+      channel: 31,
+      ip: '203.0.113.10',
+      request_id: 'request-error-1',
+      content: 'status_code=500, upstream error: do request failed',
+      other: JSON.stringify({
+        status_code: 500,
+        error_code: 'do_request_failed',
+        error_type: 'new_api_error',
+        error_stage: 'upstream_request',
+        transport_error: 'write: broken pipe',
+        request_path: '/v1/images/generations',
+      }),
+    };
+
+    const detail = buildUsageLogDetail({ record, expandRows: [], t: identityT });
+
+    expect(detail.kind).toBe('error');
+    expect(detail.title).toBe('请求错误详情');
+    expect(detail.showUsage).toBe(false);
+    expect(detail.showBilling).toBe(false);
+    expect(detail.error).toMatchObject({
+      statusCode: 500,
+      errorCode: 'do_request_failed',
+      errorType: 'new_api_error',
+      stage: 'upstream_request',
+      transportError: 'write: broken pipe',
+    });
+    expect(detail.overviewItems.map((item) => item.label)).toContain('IP');
+    expect(detail.overviewItems.find((item) => item.requestId)).toMatchObject({
+      label: '请求 ID',
+      value: 'request-error-1',
+    });
+  });
+
+  test.each([
+    [1, 'topup', '充值详情'],
+    [3, 'management', '管理操作详情'],
+    [4, 'system', '系统事件详情'],
+    [6, 'refund', '退款详情'],
+    [0, 'legacy', '历史记录详情'],
+  ])(
+    'renders type %i as a non-request %s detail',
+    (type, kind, title) => {
+      const detail = buildUsageLogDetail({
+        record: { ...baseLog, type, content: '事件内容' },
+        expandRows: [],
+        t: identityT,
+      });
+
+      expect(detail.kind).toBe(kind);
+      expect(detail.title).toBe(title);
+      expect(detail.showUsage).toBe(false);
+      expect(detail.showBilling).toBe(false);
+      expect(detail.event.content).toBe('事件内容');
+    },
+  );
 });
