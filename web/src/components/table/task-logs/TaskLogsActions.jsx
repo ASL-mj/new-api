@@ -18,13 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Typography } from '@douyinfe/semi-ui';
+import { Button, Typography } from '@douyinfe/semi-ui';
 import { IconEyeOpened } from '@douyinfe/semi-icons';
+import { Video } from 'lucide-react';
 import CompactModeToggle from '../../common/ui/CompactModeToggle';
 
 const { Text } = Typography;
 
-const TaskLogsActions = ({ compactMode, setCompactMode, t }) => {
+const TaskLogsActions = ({ compactMode, setCompactMode, t, onGenerate }) => {
   return (
     <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
       <div className='flex items-center text-orange-500 mb-2 md:mb-0'>
@@ -36,6 +37,9 @@ const TaskLogsActions = ({ compactMode, setCompactMode, t }) => {
         setCompactMode={setCompactMode}
         t={t}
       />
+      <Button icon={<Video size={16} />} onClick={onGenerate}>
+        {t('生成视频')}
+      </Button>
     </div>
   );
 };

@@ -3042,6 +3042,7 @@ func TestChannelKeyFingerprintSecretSQLAcrossDialectors(t *testing.T) {
 }
 
 func TestFingerprintChannelKeyPersistsSecretAcrossCacheReset(t *testing.T) {
+	resetChannelKeyFingerprintSecretCache()
 	prepareChannelUsageSecretDB(t)
 	t.Setenv("CRYPTO_SECRET", "")
 

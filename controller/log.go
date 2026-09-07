@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -27,6 +28,10 @@ func GetAllLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
+	if err := projectTaskLogBilling(logs, c.GetInt("role")); err != nil {
+		common.ApiError(c, errors.New("Task billing details are temporarily unavailable"))
+		return
+	}
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
@@ -48,6 +53,10 @@ func GetUserLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
+	if err := projectTaskLogBilling(logs, common.RoleCommonUser); err != nil {
+		common.ApiError(c, errors.New("Task billing details are temporarily unavailable"))
+		return
+	}
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
@@ -79,6 +88,9 @@ func GetLogByKey(c *gin.Context) {
 		return
 	}
 	logs, err := model.GetLogByTokenId(tokenId)
+	if err == nil {
+		err = projectTaskLogBilling(logs, common.RoleCommonUser)
+	}
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,

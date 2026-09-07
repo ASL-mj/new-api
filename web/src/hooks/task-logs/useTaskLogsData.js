@@ -31,8 +31,9 @@ import {
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 
-export const useTaskLogsData = () => {
+export const useTaskLogsData = ({ initialTaskId = '' } = {}) => {
   const { t } = useTranslation();
+  const requestedTaskId = String(initialTaskId || '').trim();
 
   // Define column keys for selection
   const COLUMN_KEYS = {
@@ -48,6 +49,7 @@ export const useTaskLogsData = () => {
     PROGRESS: 'progress',
     FAIL_REASON: 'fail_reason',
     RESULT_URL: 'result_url',
+    BILLING: 'billing',
   };
 
   // Basic state
@@ -87,7 +89,7 @@ export const useTaskLogsData = () => {
 
   const formInitValues = {
     channel_id: '',
-    task_id: '',
+    task_id: requestedTaskId,
     dateRange: [
       timestamp2string(zeroNow.getTime() / 1000),
       timestamp2string(now.getTime() / 1000 + 3600),
@@ -140,6 +142,7 @@ export const useTaskLogsData = () => {
       [COLUMN_KEYS.PROGRESS]: true,
       [COLUMN_KEYS.FAIL_REASON]: true,
       [COLUMN_KEYS.RESULT_URL]: true,
+      [COLUMN_KEYS.BILLING]: true,
     };
   };
 
@@ -201,7 +204,7 @@ export const useTaskLogsData = () => {
 
     return {
       channel_id: formValues.channel_id || '',
-      task_id: formValues.task_id || '',
+      task_id: formValues.task_id || requestedTaskId,
       start_timestamp,
       end_timestamp,
     };
@@ -235,14 +238,19 @@ export const useTaskLogsData = () => {
     let url = isAdminUser
       ? `/api/task/?p=${page}&page_size=${size}&channel_id=${channel_id}&task_id=${task_id}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}`
       : `/api/task/self?p=${page}&page_size=${size}&task_id=${task_id}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}`;
-    const res = await API.get(url);
-    const { success, message, data } = res.data;
-    if (success) {
-      syncPageData(data);
-    } else {
-      showError(message);
+    try {
+      const res = await API.get(url, { skipErrorHandler: true });
+      const { success, message, data } = res.data;
+      if (success) {
+        syncPageData(data);
+      } else {
+        showError(message);
+      }
+    } catch {
+      showError(t('刷新失败'));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // Page handlers

@@ -17,6 +17,9 @@ import (
 )
 
 type Log struct {
+	// Nullable so ordinary logs retain unrestricted cardinality on all databases.
+	TaskSettlementID *int64 `json:"-" gorm:"uniqueIndex:uq_logs_task_settlement_id"`
+	TaskSubmissionID *int64 `json:"-" gorm:"uniqueIndex:uq_logs_task_submission_id"`
 	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
 	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
 	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`

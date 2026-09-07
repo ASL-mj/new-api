@@ -38,7 +38,12 @@ func GetAllTask(c *gin.Context) {
 	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, true))
+	projected, err := tasksToDto(items, true, c.GetInt("role"))
+	if err != nil {
+		common.ApiErrorMsg(c, "Task settlement information is temporarily unavailable")
+		return
+	}
+	pageInfo.SetItems(projected)
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -62,11 +67,20 @@ func GetUserTask(c *gin.Context) {
 	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, false))
+	projected, err := tasksToDto(items, false, c.GetInt("role"))
+	if err != nil {
+		common.ApiErrorMsg(c, "Task settlement information is temporarily unavailable")
+		return
+	}
+	pageInfo.SetItems(projected)
 	common.ApiSuccess(c, pageInfo)
 }
 
-func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
+func tasksToDto(tasks []*model.Task, fillUser bool, role int) ([]*dto.TaskDto, error) {
+	settlements, err := taskVideoSettlements(tasks)
+	if err != nil {
+		return nil, err
+	}
 	var userIdMap map[int]*model.UserBase
 	if fillUser {
 		userIdMap = make(map[int]*model.UserBase)
@@ -89,6 +103,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 		result[i] = relay.TaskModel2Dto(task)
+		projectTaskVideo(result[i], task, settlements[task.ID], role)
 	}
-	return result
+	return result, nil
 }

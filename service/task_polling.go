@@ -94,6 +94,9 @@ func TaskPollingLoop() {
 		time.Sleep(time.Duration(15) * time.Second)
 		common.SysLog("任务进度轮询开始")
 		ctx := context.TODO()
+		if err := runTaskPollingV2(ctx); err != nil {
+			logger.LogError(ctx, "V2 task polling failed")
+		}
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 		platformTask := make(map[constant.TaskPlatform][]*model.Task)

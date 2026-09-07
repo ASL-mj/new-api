@@ -4,15 +4,24 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 )
 
 type TaskStatus string
+
+type TaskSettlementStatus string
+
+const (
+	TaskSettlementStatusPending TaskSettlementStatus = "pending"
+	TaskSettlementStatusLegacy  TaskSettlementStatus = "legacy"
+)
 
 func (t TaskStatus) ToVideoStatus() string {
 	var status string
@@ -42,24 +51,38 @@ const (
 )
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
-	StartTime  int64                 `json:"start_time" gorm:"index"`
-	FinishTime int64                 `json:"finish_time" gorm:"index"`
-	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	ID                   int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt            int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt            int64                 `json:"updated_at"`
+	TaskID               string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
+	Platform             constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId               int                   `json:"user_id" gorm:"index"`
+	Group                string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId            int                   `json:"channel_id" gorm:"index"`
+	Quota                int                   `json:"quota"`
+	Action               string                `json:"action" gorm:"type:varchar(40);index"`                                      // 任务类型, song, lyrics, description-mode
+	Status               TaskStatus            `json:"status" gorm:"type:varchar(20);index;index:idx_task_poll_ready,priority:1"` // 任务状态
+	FailReason           string                `json:"fail_reason"`
+	SubmitTime           int64                 `json:"submit_time" gorm:"index"`
+	StartTime            int64                 `json:"start_time" gorm:"index"`
+	FinishTime           int64                 `json:"finish_time" gorm:"index"`
+	Progress             string                `json:"progress" gorm:"type:varchar(20);index"`
+	PollFailures         int                   `json:"poll_failures" gorm:"not null;default:0"`
+	PollingVersion       int                   `json:"-" gorm:"not null;default:0"`
+	SubmissionSettled    bool                  `json:"-" gorm:"not null;default:false"`
+	SubmissionState      string                `json:"-" gorm:"type:varchar(20);not null;default:'';index"`
+	SubmissionPayload    string                `json:"-" gorm:"type:text"`
+	SubmissionEffectsAt  int64                 `json:"-" gorm:"not null;default:0"`
+	SubmissionNextAt     int64                 `json:"-" gorm:"not null;default:0;index"`
+	SubmissionAttempts   int                   `json:"-" gorm:"not null;default:0"`
+	LastPollAt           int64                 `json:"last_poll_at" gorm:"not null;default:0"`
+	NextPollAt           int64                 `json:"next_poll_at" gorm:"not null;default:0;index:idx_task_poll_ready,priority:2"`
+	LastPollErrorClass   string                `json:"last_poll_error_class" gorm:"type:varchar(40);not null;default:''"`
+	LastPollErrorMessage string                `json:"last_poll_error_message" gorm:"type:text"`
+	SettlementStatus     TaskSettlementStatus  `json:"settlement_status" gorm:"type:varchar(20);not null;default:'pending'"`
+	SettledAt            int64                 `json:"settled_at" gorm:"not null;default:0"`
+	Properties           Properties            `json:"properties" gorm:"type:json"`
+	Username             string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -115,12 +138,13 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	TaskPricingSnapshot *types.TaskPricingSnapshot `json:"task_pricing_snapshot,omitempty"`
+	ModelPrice          float64                    `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio          float64                    `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio          float64                    `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios         map[string]float64         `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName     string                     `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling      bool                       `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -220,6 +244,64 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	return t
 }
 
+// InitTaskSubmission creates the durable local record before an upstream task
+// request is sent. The initial NOT_START state is intentionally retained if
+// the process stops before the upstream task ID can be bound.
+func InitTaskSubmission(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
+	task := InitTask(platform, relayInfo)
+	task.ApplySubmissionContext(platform, relayInfo)
+	return task
+}
+
+// ApplySubmissionContext refreshes a NOT_START task with the channel and
+// billing facts selected for the current upstream attempt. It must run before
+// BindUpstreamSubmission so retry attempts are polled against the channel that
+// actually accepted the task.
+func (t *Task) ApplySubmissionContext(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) {
+	base := InitTask(platform, relayInfo)
+	t.Platform = base.Platform
+	t.UserId = base.UserId
+	t.Group = base.Group
+	t.ChannelId = base.ChannelId
+	t.Properties = base.Properties
+	t.PrivateData = base.PrivateData
+	t.Quota = relayInfo.PriceData.Quota
+	t.Action = relayInfo.Action
+	t.PollingVersion = relayInfo.TaskPollingVersion
+	t.PrivateData.BillingSource = relayInfo.BillingSource
+	t.PrivateData.SubscriptionId = relayInfo.SubscriptionId
+	t.PrivateData.TokenId = relayInfo.TokenId
+	t.PrivateData.BillingContext = &TaskBillingContext{
+		TaskPricingSnapshot: cloneTaskPricingSnapshot(relayInfo.TaskPricingSnapshot),
+		ModelPrice:          relayInfo.PriceData.ModelPrice,
+		GroupRatio:          relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+		ModelRatio:          relayInfo.PriceData.ModelRatio,
+		OtherRatios:         cloneTaskOtherRatios(relayInfo.PriceData.OtherRatios),
+		OriginModelName:     relayInfo.OriginModelName,
+		PerCallBilling:      common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+	}
+}
+
+func cloneTaskPricingSnapshot(source *types.TaskPricingSnapshot) *types.TaskPricingSnapshot {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.H3Rule.ResolutionRatios = cloneTaskOtherRatios(source.H3Rule.ResolutionRatios)
+	return &cloned
+}
+
+func cloneTaskOtherRatios(source map[string]float64) map[string]float64 {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]float64, len(source))
+	for name, ratio := range source {
+		cloned[name] = ratio
+	}
+	return cloned
+}
+
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
 	var tasks []*Task
 	var err error
@@ -304,7 +386,8 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	var tasks []*Task
 	err := DB.Where("progress != ?", "100%").
-		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("polling_version <> ?", 2).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusNotStart, TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
@@ -319,7 +402,12 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").
+		Where("polling_version <> ?", 2).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusNotStart, TaskStatusFailure, TaskStatusSuccess}).
+		Limit(limit).
+		Order("id").
+		Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -373,6 +461,14 @@ func (Task *Task) Insert() error {
 	var err error
 	err = DB.Create(Task).Error
 	return err
+}
+
+func GetTaskByID(id int64) (*Task, error) {
+	var task Task
+	if err := DB.First(&task, id).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 type taskSnapshot struct {
@@ -434,6 +530,24 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+// BindUpstreamSubmission advances a previously persisted task only after the
+// upstream task ID is known. A process stop before this call leaves the
+// NOT_START record intact for diagnosis and later recovery.
+func (t *Task) BindUpstreamSubmission(upstreamTaskID string, taskData json.RawMessage, quota int) (bool, error) {
+	if t.ID == 0 {
+		return false, fmt.Errorf("task must be persisted before binding upstream submission")
+	}
+	if upstreamTaskID == "" {
+		return false, fmt.Errorf("upstream task ID is required")
+	}
+	t.PrivateData.UpstreamTaskID = upstreamTaskID
+	t.Data = taskData
+	t.Quota = quota
+	t.Status = TaskStatusSubmitted
+	t.Progress = "0%"
+	return t.UpdateWithStatus(TaskStatusNotStart)
 }
 
 // TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.

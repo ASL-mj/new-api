@@ -40,6 +40,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) (time.Time,
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
+	if info.TaskRelayInfo != nil && info.PublicTaskID != "" {
+		other["task_id"] = info.PublicTaskID
+		other["task_billing"] = map[string]any{"task_id": info.PublicTaskID, "pre_consumed_quota": info.PriceData.Quota, "settlement_status": "pending"}
+	}
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
 	if info.PriceData.ModelRatio > 0 {
@@ -76,6 +80,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) (time.Time,
 // 其余情况（分组倍率为 0 且按倍率计费）预扣计费额本身为 0，记 0，
 // 任务完成按 token 重算时会补记标准口径差额。
 func standardTaskQuotaEstimate(info *relaycommon.RelayInfo) int {
+	if info.TaskRelayInfo != nil && info.TaskPricingSnapshot != nil {
+		if quota, err := info.TaskPricingSnapshot.StandardQuota(info.TaskPricingSnapshot.Submitted); err == nil {
+			return quota
+		}
+	}
 	groupRatio := info.PriceData.GroupRatioInfo.GroupRatio
 	if groupRatio > 0 {
 		return int(math.Round(float64(info.PriceData.Quota) / groupRatio))

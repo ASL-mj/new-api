@@ -25,22 +25,40 @@ import (
 // https://platform.minimaxi.com/docs/api-reference/video-generation-intro
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
-	ChannelType int
-	apiKey      string
-	baseURL     string
+	ChannelType    int
+	apiKey         string
+	baseURL        string
+	upstreamModel  string
+	expectedTaskID string
+	h3Request      *h3Request
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
+	a.upstreamModel = info.UpstreamModelName
+	a.expectedTaskID = ""
+	a.h3Request = nil
 }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
+	// Model mapping runs later. Defer metadata-only prompts for strict validation
+	// in PrepareTaskPricing; ordinary v1 requests retain the legacy validator.
+	if IsH3ModelName(info.UpstreamModelName) || IsH3ModelName(info.OriginModelName) {
+		return a.validateH3Deferred(c, info)
+	}
+	var req relaycommon.TaskSubmitReq
+	if common.UnmarshalBodyReusable(c, &req) == nil && strings.TrimSpace(req.Prompt) == "" && req.Metadata["content"] != nil {
+		return a.validateH3Deferred(c, info)
+	}
 	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if IsH3ModelName(info.UpstreamModelName) {
+		return strings.TrimRight(a.baseURL, "/") + H3SubmitEndpoint, nil
+	}
 	return fmt.Sprintf("%s%s", a.baseURL, TextToVideoEndpoint), nil
 }
 
@@ -52,6 +70,9 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 }
 
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if IsH3ModelName(info.UpstreamModelName) {
+		return a.h3Body(info)
+	}
 	v, exists := c.Get("task_request")
 	if !exists {
 		return nil, fmt.Errorf("request not found in context")
@@ -75,10 +96,16 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	if IsH3ModelName(info.UpstreamModelName) {
+		return a.h3DoRequest(c, info)
+	}
 	return channel.DoTaskApiRequest(a, c, info, requestBody)
 }
 
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
+	if IsH3ModelName(info.UpstreamModelName) {
+		return a.h3DoResponse(c, resp, info)
+	}
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
@@ -111,10 +138,22 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	return hResp.TaskID, responseBody, nil
 }
 
+// HandlesTaskSubmissionHTTPStatus lets H3 classify 408/5xx and structured 4xx
+// responses itself. Legacy Hailuo keeps the relay's historical non-200 path.
+func (a *TaskAdaptor) HandlesTaskSubmissionHTTPStatus(info *relaycommon.RelayInfo) bool {
+	return info != nil && IsH3ModelName(info.UpstreamModelName)
+}
+
 func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
 	taskID, ok := body["task_id"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
+	}
+	if mapped, ok := body["model"].(string); ok && mapped != "" {
+		a.upstreamModel = mapped
+	}
+	if IsH3ModelName(a.upstreamModel) {
+		return a.h3FetchTask(baseUrl, key, taskID, proxy)
 	}
 
 	uri := fmt.Sprintf("%s%s?task_id=%s", baseUrl, QueryTaskEndpoint, taskID)
@@ -182,6 +221,9 @@ func (a *TaskAdaptor) parseResolutionFromSize(size string, modelConfig ModelConf
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
+	if IsH3ModelName(a.upstreamModel) {
+		return parseH3Task(respBody, a.expectedTaskID)
+	}
 	resTask := QueryTaskResponse{}
 	if err := common.Unmarshal(respBody, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
@@ -224,6 +266,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {
+	if IsH3ModelName(originTask.Properties.UpstreamModelName) || (originTask.PrivateData.BillingContext != nil && originTask.PrivateData.BillingContext.TaskPricingSnapshot != nil) {
+		return common.Marshal(originTask.ToOpenAIVideo())
+	}
 	var hailuoResp QueryTaskResponse
 	if err := common.Unmarshal(originTask.Data, &hailuoResp); err != nil {
 		return nil, errors.Wrap(err, "unmarshal hailuo task data failed")

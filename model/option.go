@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/setting/task_setting"
 )
 
 type Option struct {
@@ -23,6 +24,8 @@ type Option struct {
 
 func validateOptionValue(key string, value string) (string, error) {
 	switch key {
+	case task_setting.H3PricingOption:
+		return value, task_setting.ValidateH3PricingRules(value)
 	case "ChannelUsageTimezone":
 		timezone := strings.TrimSpace(value)
 		if timezone == "" {

@@ -587,7 +587,7 @@ func RelayTask(c *gin.Context) {
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
 	defer func() {
-		if taskErr != nil && relayInfo.Billing != nil {
+		if taskErr != nil && relayInfo.Billing != nil && !service.TaskSubmissionRetainsFunding(taskErr.Code) {
 			relayInfo.Billing.Refund(c)
 		}
 		if taskErr != nil || result != nil {
@@ -641,6 +641,9 @@ func RelayTask(c *gin.Context) {
 		if taskErr == nil {
 			break
 		}
+		if service.TaskSubmissionRetainsFunding(taskErr.Code) {
+			break
+		}
 
 		if !taskErr.LocalError {
 			processChannelError(c,
@@ -660,33 +663,36 @@ func RelayTask(c *gin.Context) {
 		logger.LogInfo(c, retryLogStr)
 	}
 
-	// ── 成功：结算 + 日志 + 插入任务 ──
+	// ── 成功：结算 + 日志 + 补写已持久化任务的渠道用量 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+		if result != nil && result.Task != nil && result.Task.SubmissionSettled {
+			// V2 submission already committed the initial ledger and its durable
+			// task gate. Do not run the legacy post-response accounting again.
+			if result.Task.SubmissionEffectsAt == 0 {
+				_ = service.RetryTaskSubmissionEffects(c.Request.Context(), 100)
+			}
+			// H3's adaptor deliberately does not write the provider response.
+			// Emit the public OpenAI task envelope only after local binding and
+			// accounting have committed; TaskVideoResponse further projects this
+			// to the dashboard session shape.
+			c.JSON(http.StatusOK, gin.H{"id": result.Task.TaskID, "object": "video"})
+			return
+		}
+		settleErr := service.SettleBilling(c, relayInfo, result.Quota)
+		if settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
 		usageRecordedAt, channelStandardQuota := service.LogTaskConsumption(c, relayInfo)
 
-		task := model.InitTask(result.Platform, relayInfo)
-		task.PrivateData.ChannelUsageRecordedAt = usageRecordedAt.Unix()
-		task.PrivateData.ChannelStandardQuota = channelStandardQuota
-		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
-		task.PrivateData.BillingSource = relayInfo.BillingSource
-		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
-		task.PrivateData.TokenId = relayInfo.TokenId
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios,
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
-		}
-		task.Quota = result.Quota
-		task.Data = result.TaskData
-		task.Action = relayInfo.Action
-		if insertErr := task.Insert(); insertErr != nil {
-			common.SysError("insert task error: " + insertErr.Error())
+		if result.Task == nil || !result.TaskBound {
+			common.SysError("task submission completed without a bound local task record")
+		} else {
+			result.Task.PrivateData.ChannelUsageRecordedAt = usageRecordedAt.Unix()
+			result.Task.PrivateData.ChannelStandardQuota = channelStandardQuota
+			result.Task.SubmissionSettled = settleErr == nil
+			if updateErr := result.Task.Update(); updateErr != nil {
+				common.SysError("update submitted task error: " + updateErr.Error())
+			}
 		}
 	}
 

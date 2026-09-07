@@ -257,6 +257,9 @@ func migrateDB() error {
 	if err := migrateMonitorGroupIntervalSeconds(); err != nil {
 		return err
 	}
+	if err := migrateTaskSchema(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -272,7 +275,6 @@ func migrateDB() error {
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
-		&Task{},
 		&PerfMetric{},
 		&MonitorGroup{},
 		&MonitorGroupTarget{},
@@ -309,6 +311,34 @@ func migrateDB() error {
 	return nil
 }
 
+func migrateTaskSchema() error {
+	migrator := DB.Migrator()
+	const settlementMigrationMarker = "idx_task_settlement_migration_v1"
+	hadTaskTable := migrator.HasTable(&Task{})
+	legacyTerminalTasks := hadTaskTable && !migrator.HasIndex(&Task{}, settlementMigrationMarker)
+	if err := DB.AutoMigrate(&Task{}, &TaskSettlement{}); err != nil {
+		return err
+	}
+	if legacyTerminalTasks {
+		if err := DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&Task{}).
+				Where("status IN ?", []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).
+				Update("settlement_status", TaskSettlementStatusLegacy).Error; err != nil {
+				return err
+			}
+			return tx.Model(&Task{}).
+				Where("status = ?", TaskStatusNotStart).
+				Update("status", TaskStatusSubmitted).Error
+		}); err != nil {
+			return err
+		}
+	}
+	if !migrator.HasIndex(&Task{}, settlementMigrationMarker) {
+		return DB.Exec("CREATE INDEX " + settlementMigrationMarker + " ON tasks (settlement_status)").Error
+	}
+	return nil
+}
+
 func migrateMonitorGroupIntervalSeconds() error {
 	migrator := DB.Migrator()
 	if !migrator.HasTable(&MonitorGroup{}) || migrator.HasColumn(&MonitorGroup{}, "interval_seconds") {
@@ -329,6 +359,9 @@ END`).Error
 }
 
 func migrateDBFast() error {
+	if err := migrateTaskSchema(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -349,7 +382,6 @@ func migrateDBFast() error {
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
-		{&Task{}, "Task"},
 		{&PerfMetric{}, "PerfMetric"},
 		{&MonitorGroup{}, "MonitorGroup"},
 		{&MonitorGroupTarget{}, "MonitorGroupTarget"},

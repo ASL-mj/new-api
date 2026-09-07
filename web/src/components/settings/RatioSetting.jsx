@@ -26,6 +26,7 @@ import GroupRatioSettings from '../../pages/Setting/Ratio/GroupRatioSettings';
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
 import UpstreamRatioSync from '../../pages/Setting/Ratio/UpstreamRatioSync';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
+import H3PricingSettings from '../../pages/Setting/Ratio/H3PricingSettings';
 
 import { API, showError, toBoolean } from '../../helpers';
 
@@ -111,6 +112,9 @@ const RatioSetting = () => {
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('工具调用定价')} itemKey='tool_price'>
             <ToolPriceSettings options={inputs} />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab={t('MiniMax-H3 定价')} itemKey='h3_price'>
+            <H3PricingSettings options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
         </Tabs>
       </Card>

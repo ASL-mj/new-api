@@ -397,6 +397,9 @@ func TokenAuth() func(c *gin.Context) {
 			userGroup = tokenGroup
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
+		// Keep the explicit name available to task/dashboard middleware and
+		// request metadata while the canonical context key remains "group".
+		c.Set("using_group", userGroup)
 
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {

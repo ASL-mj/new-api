@@ -19,8 +19,13 @@ tiktoken_cache
 .gocache
 .gomodcache/
 .cache
+.local-runtime/
 web/bun.lock
 plans
+!docs/
+!docs/superpowers/
+!docs/superpowers/plans/
+!docs/superpowers/plans/2026-09-06-upstream-capability-upgrade-rollout.md
 .claude
 .superpowers/
 new-api-deploy-*

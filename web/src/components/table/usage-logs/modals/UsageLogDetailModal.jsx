@@ -25,7 +25,9 @@ import {
   IconChevronRight,
 } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
-import { copy, showSuccess } from '../../../../helpers';
+import { copy, showSuccess, isAdmin, isRoot } from '../../../../helpers';
+import { readTaskBillingLog } from '../../../../helpers/h3Task';
+import TaskBillingDetails from '../../task-logs/TaskBillingDetails';
 import { buildUsageLogDetail } from './usageLogDetailAdapter';
 import './usageLogDetailModal.css';
 
@@ -203,6 +205,7 @@ const UsageLogDetailModal = ({
   };
 
   const tokens = detail?.tokens || {};
+  const taskBilling = readTaskBillingLog(selectedLog?.other);
 
   return (
     <Modal
@@ -243,6 +246,21 @@ const UsageLogDetailModal = ({
                 items={detail.overviewItems}
                 onCopy={handleCopy}
               />
+
+              {taskBilling && (
+                <section className='uldm-section'>
+                  <h3 className='uldm-section-title'>{t('任务账务')}</h3>
+                  {taskBilling.task_id && (
+                    <div className='uldm-mono mb-3'>{taskBilling.task_id}</div>
+                  )}
+                  <TaskBillingDetails
+                    task={taskBilling}
+                    admin={isAdmin()}
+                    root={isRoot()}
+                    t={t}
+                  />
+                </section>
+              )}
 
               {detail.error && (
                 <ErrorDetail error={detail.error} t={t} />

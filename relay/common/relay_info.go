@@ -694,6 +694,12 @@ type TaskRelayInfo struct {
 	// PublicTaskID 是提交时预生成的 task_xxxx 格式公开 ID，
 	// 供 DoResponse 在返回给客户端时使用（避免暴露上游真实 ID）。
 	PublicTaskID string
+	// PersistedTaskID identifies the local recovery record created before the
+	// first upstream submission attempt. It is internal-only and reused by
+	// retry attempts so a request has a single public task lifecycle.
+	PersistedTaskID     int64
+	TaskPollingVersion  int
+	TaskPricingSnapshot *types.TaskPricingSnapshot
 
 	ConsumeQuota bool
 
@@ -786,15 +792,16 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	TaskUsage        *types.H3UsageOverrides `json:"task_usage,omitempty"`
+	Code             int                     `json:"code"`
+	TaskID           string                  `json:"task_id"`
+	Status           string                  `json:"status"`
+	Reason           string                  `json:"reason,omitempty"`
+	Url              string                  `json:"url,omitempty"`
+	RemoteUrl        string                  `json:"remote_url,omitempty"`
+	Progress         string                  `json:"progress,omitempty"`
+	CompletionTokens int                     `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens      int                     `json:"total_tokens,omitempty"`      // 用于按倍率计费
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

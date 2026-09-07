@@ -62,6 +62,14 @@ func Init() error {
 
 // GetLocalizer returns a localizer for the specified language
 func GetLocalizer(lang string) *i18n.Localizer {
+	// Tests and embedded consumers may call translation before main has wired
+	// i18n.Init. Lazily initialize the embedded bundle in that case.
+	mu.RLock()
+	initialized := bundle != nil
+	mu.RUnlock()
+	if !initialized {
+		_ = Init()
+	}
 	lang = normalizeLang(lang)
 
 	mu.RLock()

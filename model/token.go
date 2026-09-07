@@ -272,7 +272,18 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+	// Unit/integration fixtures may replace the database flags directly without
+	// going through chooseDB, so the dialect column cache can still be empty.
+	// Keep the reserved-column query valid in that case.
+	keyColumn := commonKeyCol
+	if keyColumn == "" {
+		if common.UsingPostgreSQL {
+			keyColumn = `"key"`
+		} else {
+			keyColumn = "`key`"
+		}
+	}
+	err = DB.Where(keyColumn+" = ?", key).First(&token).Error
 	return token, err
 }
 

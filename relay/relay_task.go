@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +28,68 @@ type TaskSubmitResult struct {
 	TaskData       []byte
 	Platform       constant.TaskPlatform
 	Quota          int
+	Task           *model.Task
+	TaskBound      bool
 	//PerCallPrice   types.PriceData
+}
+
+type submissionOutcomeUnknown interface {
+	SubmissionOutcomeUnknown() bool
+}
+
+type taskSubmissionHTTPStatusHandler interface {
+	HandlesTaskSubmissionHTTPStatus(info *relaycommon.RelayInfo) bool
+}
+
+func taskSubmissionDoRequestError(ctx context.Context, task *model.Task, err error) *dto.TaskError {
+	var unknown submissionOutcomeUnknown
+	if !errors.As(err, &unknown) || !unknown.SubmissionOutcomeUnknown() {
+		return service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
+	}
+	taskErr := service.TaskErrorWrapperLocal(err, service.TaskSubmissionUnknownCode, http.StatusBadGateway)
+	return markTaskSubmissionUnknown(ctx, task, taskErr)
+}
+
+func markTaskSubmissionUnknown(ctx context.Context, task *model.Task, taskErr *dto.TaskError) *dto.TaskError {
+	if task == nil || task.ID == 0 {
+		return taskErr
+	}
+	if err := service.MarkTaskSubmissionUnknown(ctx, task.ID); err != nil {
+		common.SysError("mark task submission unknown error: " + err.Error())
+		return service.TaskErrorWrapperLocal(errors.New("task submission reconciliation state is pending"), service.TaskSubmissionPendingCode, http.StatusInternalServerError)
+	}
+	task.SubmissionState = service.TaskSubmissionUnknown
+	return taskErr
+}
+
+func persistTaskBeforeUpstream(platform constant.TaskPlatform, info *relaycommon.RelayInfo) (*model.Task, error) {
+	if info.TaskRelayInfo == nil {
+		return nil, fmt.Errorf("task relay metadata is required")
+	}
+	if service.TaskPollingV2EnabledForChannel(info.ChannelId) {
+		info.TaskPollingVersion = 2
+	}
+	if info.PersistedTaskID == 0 {
+		task := model.InitTaskSubmission(platform, info)
+		if err := task.Insert(); err != nil {
+			return nil, err
+		}
+		info.PersistedTaskID = task.ID
+		return task, nil
+	}
+
+	task, err := model.GetTaskByID(info.PersistedTaskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != model.TaskStatusNotStart {
+		return nil, fmt.Errorf("persisted task %d is no longer awaiting upstream submission", task.ID)
+	}
+	task.ApplySubmissionContext(platform, info)
+	if err := task.Update(); err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -178,11 +240,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
-	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+	handledPrice := false
+	if preparer, ok := adaptor.(interface {
+		PrepareTaskBilling(*gin.Context, *relaycommon.RelayInfo) (bool, error)
+	}); ok {
+		var err error
+		handledPrice, err = preparer.PrepareTaskBilling(c, info)
+		if err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "task_price_error", http.StatusBadRequest)
+		}
 	}
-	info.PriceData = priceData
+	if !handledPrice {
+		priceData, err := helper.ModelPriceHelperPerCall(c, info)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+	}
 
 	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
 	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
@@ -194,7 +268,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 6. 将 OtherRatios 应用到基础额度
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
+	if !handledPrice && !common.StringsContains(constant.TaskPricePatches, modelName) {
 		for _, ra := range info.PriceData.OtherRatios {
 			if ra != 1.0 {
 				info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
@@ -215,13 +289,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 	}
+	task, err := persistTaskBeforeUpstream(platform, info)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "persist_task_failed", http.StatusInternalServerError)
+	}
+	if info.TaskPollingVersion == 2 {
+		if err := service.PrepareTaskSubmissionAccounting(c.Request.Context(), task, info); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, service.TaskSubmissionPendingCode, http.StatusInternalServerError)
+		}
+	}
 
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		if info.TaskPollingVersion == 2 {
+			return nil, taskSubmissionDoRequestError(c.Request.Context(), task, err)
+		}
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	if resp != nil && resp.StatusCode != http.StatusOK && !taskAdaptorHandlesSubmissionHTTPStatus(adaptor, info) {
 		responseBody, _ := io.ReadAll(resp.Body)
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
@@ -237,6 +323,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 解析响应
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
+		if info.TaskPollingVersion == 2 && taskErr.Code == service.TaskSubmissionUnknownCode {
+			taskErr = markTaskSubmissionUnknown(c.Request.Context(), task, taskErr)
+		}
 		return nil, taskErr
 	}
 
@@ -249,12 +338,38 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PriceData.Quota = finalQuota
 	}
 
+	// V2 commits the upstream identity and the initial ledger before the
+	// controller acknowledges the public task. Legacy task providers retain the
+	// previous binding behavior.
+	taskBound := false
+	if info.TaskPollingVersion == 2 {
+		info.PriceData.Quota = finalQuota
+		if err := service.CompleteTaskSubmission(c.Request.Context(), task, info, upstreamTaskID, taskData); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, service.TaskSubmissionPendingCode, http.StatusInternalServerError)
+		}
+		taskBound = true
+	} else {
+		task.ApplySubmissionContext(platform, info)
+		var bindErr error
+		taskBound, bindErr = task.BindUpstreamSubmission(upstreamTaskID, taskData, finalQuota)
+		if bindErr != nil {
+			common.SysError("bind upstream task submission error: " + bindErr.Error())
+		}
+	}
+
 	return &TaskSubmitResult{
 		UpstreamTaskID: upstreamTaskID,
 		TaskData:       taskData,
 		Platform:       platform,
 		Quota:          finalQuota,
+		Task:           task,
+		TaskBound:      taskBound,
 	}, nil
+}
+
+func taskAdaptorHandlesSubmissionHTTPStatus(adaptor channel.TaskAdaptor, info *relaycommon.RelayInfo) bool {
+	handler, ok := adaptor.(taskSubmissionHTTPStatusHandler)
+	return ok && handler.HandlesTaskSubmissionHTTPStatus(info)
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。

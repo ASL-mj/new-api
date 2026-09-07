@@ -44,6 +44,9 @@ import {
 import { CHANNEL_OPTIONS } from '../../../constants/channel.constants';
 import { stringToColor } from '../../../helpers/render';
 import { Avatar, Space } from '@douyinfe/semi-ui';
+import { renderQuota } from '../../../helpers';
+import { taskBillingSummary, taskDetailHref } from '../../../helpers/h3Task';
+import { settlementLabel } from './TaskBillingDetails';
 
 const colors = [
   'amber',
@@ -170,7 +173,7 @@ const renderPlatform = (platform, t) => {
   }
 };
 
-const renderStatus = (type, t) => {
+export const renderStatus = (type, t) => {
   switch (type) {
     case 'SUCCESS':
       return (
@@ -238,6 +241,7 @@ export const getTaskLogsColumns = ({
   COLUMN_KEYS,
   copyText,
   openContentModal,
+  openTaskDetail,
   isAdminUser,
   openVideoModal,
   openAudioModal,
@@ -301,15 +305,10 @@ export const getTaskLogsColumns = ({
         const displayText = String(record.username || userId || '?');
         return (
           <Space>
-            <Avatar
-              size='extra-small'
-              color={stringToColor(displayText)}
-            >
+            <Avatar size='extra-small' color={stringToColor(displayText)}>
               {displayText.slice(0, 1)}
             </Avatar>
-            <Typography.Text>
-              {displayText}
-            </Typography.Text>
+            <Typography.Text>{displayText}</Typography.Text>
           </Space>
         );
       },
@@ -334,16 +333,28 @@ export const getTaskLogsColumns = ({
       key: COLUMN_KEYS.TASK_ID,
       title: t('任务ID'),
       dataIndex: 'task_id',
-      render: (text, record, index) => {
+      render: (text, record) => {
         return (
-          <Typography.Text
-            ellipsis={{ showTooltip: true }}
-            onClick={() => {
-              openContentModal(JSON.stringify(record, null, 2));
+          <a
+            href={taskDetailHref(text)}
+            onClick={(event) => {
+              if (!openTaskDetail) return;
+              event.preventDefault();
+              openTaskDetail(record);
+            }}
+            aria-label={`${t('任务详情')}: ${text}`}
+            style={{
+              display: 'block',
+              maxWidth: 240,
+              overflow: 'hidden',
+              textAlign: 'left',
+              textOverflow: 'ellipsis',
+              textDecoration: 'none',
+              whiteSpace: 'nowrap',
             }}
           >
-            <div>{text}</div>
-          </Typography.Text>
+            {text}
+          </a>
         );
       },
     },
@@ -353,6 +364,38 @@ export const getTaskLogsColumns = ({
       dataIndex: 'status',
       render: (text, record, index) => {
         return <div>{renderStatus(text, t)}</div>;
+      },
+    },
+    {
+      key: COLUMN_KEYS.BILLING,
+      title: t('最终扣费'),
+      render: (_, record) => {
+        const summary = taskBillingSummary(record);
+        return (
+          <a
+            href={taskDetailHref(record.task_id)}
+            onClick={(event) => {
+              if (!openTaskDetail) return;
+              event.preventDefault();
+              openTaskDetail(record);
+            }}
+            aria-label={`${t('任务详情')}: ${record.task_id}`}
+            style={{
+              display: 'block',
+              textAlign: 'left',
+              textDecoration: 'none',
+            }}
+          >
+            {summary.final === null
+              ? settlementLabel(record.settlement_status, t)
+              : renderQuota(summary.final, 6)}
+            {summary.refund !== null && (
+              <div>
+                {t('已退还金额')}: {renderQuota(summary.refund, 6)}
+              </div>
+            )}
+          </a>
+        );
       },
     },
     {
@@ -416,7 +459,8 @@ export const getTaskLogsColumns = ({
           record.action === TASK_ACTION_REMIX_GENERATE;
         const isSuccess = record.status === 'SUCCESS';
         const resultUrl = record.result_url;
-        const hasResultUrl = typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
+        const hasResultUrl =
+          typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
         if (isSuccess && isVideoTask && hasResultUrl) {
           return (
             <a

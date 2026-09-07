@@ -30,26 +30,40 @@ func (t *TaskResponse[T]) IsSuccess() bool {
 }
 
 type TaskDto struct {
-	ID         int64           `json:"id"`
-	CreatedAt  int64           `json:"created_at"`
-	UpdatedAt  int64           `json:"updated_at"`
-	TaskID     string          `json:"task_id"`
-	Platform   string          `json:"platform"`
-	UserId     int             `json:"user_id"`
-	Group      string          `json:"group"`
-	ChannelId  int             `json:"channel_id"`
-	Quota      int             `json:"quota"`
-	Action     string          `json:"action"`
-	Status     string          `json:"status"`
-	FailReason string          `json:"fail_reason"`
-	ResultURL  string          `json:"result_url,omitempty"` // 任务结果 URL（视频地址等）
-	SubmitTime int64           `json:"submit_time"`
-	StartTime  int64           `json:"start_time"`
-	FinishTime int64           `json:"finish_time"`
-	Progress   string          `json:"progress"`
-	Properties any             `json:"properties"`
-	Username   string          `json:"username,omitempty"`
-	Data       json.RawMessage `json:"data"`
+	ID                   int64           `json:"id"`
+	CreatedAt            int64           `json:"created_at"`
+	UpdatedAt            int64           `json:"updated_at"`
+	TaskID               string          `json:"task_id"`
+	Platform             string          `json:"platform"`
+	UserId               int             `json:"user_id"`
+	Group                string          `json:"group"`
+	ChannelId            int             `json:"channel_id"`
+	Quota                int             `json:"quota"`
+	Action               string          `json:"action"`
+	Status               string          `json:"status"`
+	FailReason           string          `json:"fail_reason"`
+	ResultURL            string          `json:"result_url,omitempty"` // 任务结果 URL（视频地址等）
+	SubmitTime           int64           `json:"submit_time"`
+	StartTime            int64           `json:"start_time"`
+	FinishTime           int64           `json:"finish_time"`
+	Progress             string          `json:"progress"`
+	Properties           any             `json:"properties"`
+	Username             string          `json:"username,omitempty"`
+	Data                 json.RawMessage `json:"data"`
+	Model                string          `json:"model,omitempty"`
+	PreConsumedQuota     *int            `json:"pre_consumed_quota"`
+	ActualQuota          *int            `json:"actual_quota"`
+	QuotaDelta           *int            `json:"quota_delta"`
+	SettlementStatus     string          `json:"settlement_status,omitempty"`
+	SettlementKind       string          `json:"settlement_kind,omitempty"`
+	SettledAt            int64           `json:"settled_at"`
+	PollFailures         *int            `json:"poll_failures,omitempty"`
+	LastPollErrorClass   string          `json:"last_poll_error_class,omitempty"`
+	LastPollErrorMessage string          `json:"last_poll_error_message,omitempty"`
+	LastPollAt           *int64          `json:"last_poll_at,omitempty"`
+	NextPollAt           *int64          `json:"next_poll_at,omitempty"`
+	SettlementID         *int64          `json:"settlement_id,omitempty"`
+	PricingVersion       string          `json:"pricing_version,omitempty"`
 }
 
 type FetchReq struct {

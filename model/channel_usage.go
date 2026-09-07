@@ -417,8 +417,10 @@ type ChannelUsageSettlementParams struct {
 }
 
 type ChannelUsageSettlementResult struct {
-	Channel ChannelUsageApplyResult
-	Key     *ChannelKeyUsageApplyResult
+	Channel             ChannelUsageApplyResult
+	Key                 *ChannelKeyUsageApplyResult
+	updatedChannel      *Channel
+	parentStatusChanged bool
 }
 
 type ChannelUsageDeltaParams struct {
@@ -430,9 +432,11 @@ type ChannelUsageDeltaParams struct {
 	// StandardQuotaDelta 标准口径用量差额（可为负，用于回冲）；
 	// 未传（0）时回退为 QuotaDelta。
 	StandardQuotaDelta int64
-	TokenUsedDelta     int64
-	RequestDelta       int64
-	Now                time.Time
+	// StandardQuotaExplicit preserves an intentional zero standard delta.
+	StandardQuotaExplicit bool
+	TokenUsedDelta        int64
+	RequestDelta          int64
+	Now                   time.Time
 }
 
 func (usage ChannelKeyUsage) IsQuotaExceeded() bool {
@@ -1180,7 +1184,32 @@ func ApplyChannelUsageSettlement(params ChannelUsageSettlementParams) (ChannelUs
 
 func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlementResult, error) {
 	var result ChannelUsageSettlementResult
-	if DB == nil {
+	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+		var err error
+		result, err = ApplyChannelUsageDeltaTx(tx, params)
+		return err
+	})
+	if err != nil || result.updatedChannel == nil {
+		return result, err
+	}
+	updatedChannel := result.updatedChannel
+	if result.parentStatusChanged {
+		if err := UpdateAbilityStatus(updatedChannel.Id, updatedChannel.Status == common.ChannelStatusEnabled); err != nil {
+			common.SysLog(fmt.Sprintf("failed to update ability status after channel usage delta: channel_id=%d, error=%v", updatedChannel.Id, err))
+		}
+		CacheUpdateChannelStatus(updatedChannel.Id, updatedChannel.Status)
+	}
+	if updatedChannel.ChannelInfo.IsMultiKey {
+		CacheUpdateChannel(updatedChannel)
+	}
+	return result, nil
+}
+
+// ApplyChannelUsageDeltaTx performs only persistent writes on the caller's transaction.
+// Cache propagation is the caller's responsibility after commit.
+func ApplyChannelUsageDeltaTx(tx *gorm.DB, params ChannelUsageDeltaParams) (ChannelUsageSettlementResult, error) {
+	var result ChannelUsageSettlementResult
+	if tx == nil {
 		return result, errors.New("database not initialized")
 	}
 	if params.ChannelID <= 0 {
@@ -1189,11 +1218,11 @@ func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlem
 	if params.Now.IsZero() {
 		params.Now = time.Now()
 	}
-	if params.QuotaDelta == 0 && params.TokenUsedDelta == 0 && params.RequestDelta == 0 {
+	if params.QuotaDelta == 0 && params.StandardQuotaDelta == 0 && params.TokenUsedDelta == 0 && params.RequestDelta == 0 {
 		return result, nil
 	}
 	// 差额同样按标准口径累计；未传时回退为计费口径差额。
-	if params.StandardQuotaDelta == 0 {
+	if params.StandardQuotaDelta == 0 && !params.StandardQuotaExplicit {
 		params.StandardQuotaDelta = int64(params.QuotaDelta)
 	}
 	params.QuotaDelta = int(params.StandardQuotaDelta)
@@ -1201,10 +1230,7 @@ func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlem
 	params.HasKeyIdentity = params.HasKeyIdentity && params.KeyFingerprint != ""
 
 	var updatedChannel Channel
-	var parentStatusChanged bool
-	var channelInfoChanged bool
-
-	err := runChannelUsageTransaction(func(tx *gorm.DB) error {
+	err := func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&updatedChannel, params.ChannelID).Error; err != nil {
 			return err
 		}
@@ -1270,8 +1296,8 @@ func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlem
 		if err := tx.First(&updatedChannel, updatedChannel.Id).Error; err != nil {
 			return err
 		}
-		parentStatusChanged = beforeStatus != updatedChannel.Status
-		channelInfoChanged = updatedChannel.ChannelInfo.IsMultiKey
+		result.parentStatusChanged = beforeStatus != updatedChannel.Status
+		result.updatedChannel = &updatedChannel
 		result.Channel = ChannelUsageApplyResult{
 			UsedQuota:      updatedChannel.UsedQuota,
 			QuotaLimitUsed: updatedChannel.QuotaLimitUsed,
@@ -1282,19 +1308,9 @@ func ApplyChannelUsageDelta(params ChannelUsageDeltaParams) (ChannelUsageSettlem
 			result.Key.ChannelStatus = updatedChannel.Status
 		}
 		return nil
-	})
+	}(tx)
 	if err != nil {
 		return result, err
-	}
-
-	if parentStatusChanged {
-		if err := UpdateAbilityStatus(updatedChannel.Id, updatedChannel.Status == common.ChannelStatusEnabled); err != nil {
-			common.SysLog(fmt.Sprintf("failed to update ability status after channel usage delta: channel_id=%d, error=%v", updatedChannel.Id, err))
-		}
-		CacheUpdateChannelStatus(updatedChannel.Id, updatedChannel.Status)
-	}
-	if channelInfoChanged {
-		CacheUpdateChannel(&updatedChannel)
 	}
 	return result, nil
 }
